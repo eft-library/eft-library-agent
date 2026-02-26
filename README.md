@@ -9,5 +9,5 @@
 - CPU: 12th Gen Intel(R) Core(TM) i5-12400F
 
 <!--
-pip install asyncpg httpx beautifulsoup4 python-dotenv
+pip install asyncpg httpx beautifulsoup4 python-dotenv fastmcp pydantic
 -->

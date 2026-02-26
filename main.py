@@ -1,1 +1,132 @@
-print("hi")
+"""
+MCP Server 진입점 - FastMCP SSE 방식
+"""
+
+import logging
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from fastmcp import FastMCP
+from schemas.models import ChatMessage
+from tools.retriever import search_rag as _search_rag
+from tools.llm import chat_llm as _chat_llm
+from tools.history import save_message as _save_message, get_history as _get_history
+from db.connection import get_pool
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
+log = logging.getLogger(__name__)
+
+MCP_HOST = os.getenv("MCP_HOST")
+MCP_PORT = int(os.getenv("MCP_PORT"))
+
+mcp = FastMCP("eftlibrary-rag")
+
+
+# ─────────────────────────────────────────
+# Tool 1: search_rag
+# ─────────────────────────────────────────
+@mcp.tool()
+async def search_rag(
+    query: str,
+    lang: str = "ko",
+    limit: int = 5,
+    source_table: str | None = None,
+) -> list[dict]:
+    """
+    pgvector에서 질문과 유사한 문서를 검색합니다.
+
+    Args:
+        query:        검색할 질문 텍스트
+        lang:         언어 (ko / en / ja)
+        limit:        반환할 문서 수 (기본 5)
+        source_table: 특정 테이블만 검색 (None이면 전체)
+    """
+    docs = await _search_rag(
+        query=query, lang=lang, limit=limit, source_table=source_table
+    )
+    return [d.model_dump() for d in docs]
+
+
+# ─────────────────────────────────────────
+# Tool 2: chat_llm
+# ─────────────────────────────────────────
+@mcp.tool()
+async def chat_llm(
+    messages: list[dict],
+    context: str = "",
+) -> str:
+    """
+    Ollama qwen3:8b로 답변을 생성합니다.
+
+    Args:
+        messages: 대화 히스토리 [{"role": "user"/"assistant", "content": "..."}]
+        context:  RAG에서 검색된 문서 내용 (system prompt에 주입)
+    """
+    chat_messages = [ChatMessage(**m) for m in messages]
+    return await _chat_llm(messages=chat_messages, context=context)
+
+
+# ─────────────────────────────────────────
+# Tool 3: save_message
+# ─────────────────────────────────────────
+@mcp.tool()
+async def save_message(
+    session_id: str,
+    role: str,
+    content: str,
+    lang: str = "ko",
+    source_docs: list[dict] | None = None,
+) -> dict:
+    """
+    채팅 메시지를 DB에 저장합니다.
+
+    Args:
+        session_id:  채팅 세션 UUID
+        role:        'user' 또는 'assistant'
+        content:     메시지 내용
+        lang:        언어 (ko / en / ja)
+        source_docs: 참조한 RAG 문서 목록
+    """
+    return await _save_message(
+        session_id=session_id,
+        role=role,
+        content=content,
+        lang=lang,
+        source_docs=source_docs,
+    )
+
+
+# ─────────────────────────────────────────
+# Tool 4: get_history
+# ─────────────────────────────────────────
+@mcp.tool()
+async def get_history(
+    session_id: str,
+    limit: int = 10,
+) -> list[dict]:
+    """
+    세션의 대화 히스토리를 조회합니다.
+
+    Args:
+        session_id: 채팅 세션 UUID
+        limit:      가져올 최근 메시지 수 (기본 10)
+    """
+    messages = await _get_history(session_id=session_id, limit=limit)
+    return [m.model_dump() for m in messages]
+
+
+# ─────────────────────────────────────────
+# 실행
+# ─────────────────────────────────────────
+if __name__ == "__main__":
+    # DB 풀 초기화
+    import asyncio
+
+    asyncio.get_event_loop().run_until_complete(get_pool())
+
+    log.info(f"MCP Server 시작: {MCP_HOST}:{MCP_PORT}")
+    mcp.run(transport="sse", host=MCP_HOST, port=MCP_PORT)
