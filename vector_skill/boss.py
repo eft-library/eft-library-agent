@@ -240,7 +240,6 @@ async def process_batch(
 ):
     for row in rows:
         boss_id = row["id"]
-        boss_name_ko = get_lang_value(row["name"], "ko") or boss_id
 
         for lang in LANGS:
             content = build_content(row, lang)
@@ -256,7 +255,11 @@ async def process_batch(
                     "content_type": "single",
                     "source_tables": ["boss_i18n"],
                     "boss_id": boss_id,
-                    "boss_name": boss_name_ko,
+                    "boss_name": {
+                        "ko": get_lang_value(row["name"], "ko"),
+                        "en": get_lang_value(row["name"], "en"),
+                        "ja": get_lang_value(row["name"], "ja"),
+                    },
                     "url_mapping": row.get("url_mapping") or "",
                     "spawn_map": list(row.get("spawn_map") or []),
                     "order": row.get("order"),

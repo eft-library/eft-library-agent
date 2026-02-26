@@ -185,7 +185,6 @@ async def process_batch(
     """배치 단위로 임베딩 생성 및 upsert"""
     for row in rows:
         story_id = row["id"]
-        story_name_ko = get_lang_value(row["name"], "ko") or story_id
 
         for lang in LANGS:
             content = build_content(row, lang)
@@ -202,7 +201,11 @@ async def process_batch(
                     "content_type": "single",
                     "source_tables": ["story_i18n"],
                     "story_id": story_id,
-                    "story_name": story_name_ko,
+                    "story_name": {
+                        "ko": get_lang_value(row["name"], "ko"),
+                        "en": get_lang_value(row["name"], "en"),
+                        "ja": get_lang_value(row["name"], "ja"),
+                    },
                     "order": row["order"],
                     "url": f"https://eftlibrary.com/story/{story_id}",
                 }
