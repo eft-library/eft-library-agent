@@ -15,15 +15,30 @@ from tools.llm import chat_llm as _chat_llm
 from tools.history import save_message as _save_message, get_history as _get_history
 from db.connection import get_pool
 
+import logging.handlers
+
+LOG_DIR = os.getenv("LOG_DIR", "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.handlers.TimedRotatingFileHandler(
+            filename=os.path.join(LOG_DIR, "mcp-server.log"),
+            when="midnight",  # 자정마다 롤링
+            backupCount=30,  # 30일치 보관
+            encoding="utf-8",
+        ),
+    ],
 )
 log = logging.getLogger(__name__)
 
 MCP_HOST = os.getenv("MCP_HOST")
 MCP_PORT = int(os.getenv("MCP_PORT"))
 
-mcp = FastMCP("eftlibrary-rag")
+mcp = FastMCP("eft-library-rag")
 
 
 # ─────────────────────────────────────────
