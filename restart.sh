@@ -10,7 +10,8 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 PID_FILE="$SCRIPT_DIR/mcp-server.pid"
 LOG_DIR="$SCRIPT_DIR/logs"
 LOG_FILE="$LOG_DIR/mcp-server.log"
-PYTHON=$(which python3)
+VENV="$SCRIPT_DIR/venv/bin/activate"
+PYTHON="$SCRIPT_DIR/venv/bin/python3"
 APP="$SCRIPT_DIR/main.py"
 
 mkdir -p "$LOG_DIR"
@@ -38,8 +39,14 @@ start() {
         return 1
     fi
 
+    if [ ! -f "$VENV" ]; then
+        echo -e "${RED}[mcp-server] venv를 찾을 수 없습니다: $VENV${NC}"
+        return 1
+    fi
+
     echo -e "${GREEN}[mcp-server] 시작 중...${NC}"
     cd "$SCRIPT_DIR"
+    source "$VENV"
     nohup "$PYTHON" "$APP" >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     PID=$(cat "$PID_FILE")
