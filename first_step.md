@@ -11,6 +11,8 @@ UI Server (기존 서버)
 - Rocky Linux 10
 - MCP Server
 
+## Ollama / Qwen3 8B 설치
+
 ```shell
 # Ollama 설치
 curl -fsSL https://ollama.com/install.sh | sh
@@ -51,3 +53,14 @@ curl http://server-ip:8000/api/chat -d '{
 }'
 ```
 
+## 다행인 점
+
+Ollama 기본값이 **Q4_K_M** 양자화
+
+```shell
+# 확인하기
+curl http://localhost:8000/api/show -d '{"name": "qwen3:8b"}' | grep -i quant
+
+# 값 확인
+{"quantization_level":"Q4_K_M"}
+```
