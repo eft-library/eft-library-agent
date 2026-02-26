@@ -4,6 +4,10 @@
 
 ## 사양
 
-VRAM: RTX 3060 ti / 8GB
-RAM: DDR4 16GB -> 언젠가 확장합니다.
-CPU: 12th Gen Intel(R) Core(TM) i5-12400F
+- VRAM: RTX 3060 ti / 8GB
+- RAM: DDR4 16GB -> 언젠가 확장
+- CPU: 12th Gen Intel(R) Core(TM) i5-12400F
+
+<!--
+pip install python-dotenv
+-->

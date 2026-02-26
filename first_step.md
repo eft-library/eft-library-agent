@@ -5,6 +5,7 @@ LLM Server
 - Ubuntu 22.04
 - Ollama
 - Qwen3 8B
+- Embedding: bge-m3
 
 UI Server (기존 서버)
 
