@@ -35,6 +35,10 @@ sudo vi /etc/systemd/system/ollama.service.d/override.conf
 [Service]
 Environment="OLLAMA_HOST=0.0.0.0:999999"
 
+# 환경 수정
+echo 'export OLLAMA_HOST=http://localhost:999999' >> ~/.bashrc
+source ~/.bashrc
+
 # 재실행 후 확인
 sudo systemctl daemon-reload
 sudo systemctl restart ollama
@@ -42,6 +46,9 @@ sudo systemctl status ollama
 
 # Qwen3 8B 내려받기
 ollama pull qwen3:8b
+
+# 임베딩 모델 bge-m3 내려받기
+ollama pull bge-m3
 
 # console로 테스트 해보기 - 인사 해보고 잘 되면 종료
 ollama run qwen3:8b 
