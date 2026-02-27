@@ -22,19 +22,27 @@ import logging.handlers
 LOG_DIR = os.getenv("LOG_DIR")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.handlers.TimedRotatingFileHandler(
-            filename=os.path.join(LOG_DIR, "mcp-server.log"),
-            when="midnight",  # 자정마다 롤링
-            backupCount=30,  # 30일치 보관
-            encoding="utf-8",
-        ),
-    ],
+log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# 기존 핸들러 제거
+root_logger.handlers.clear()
+
+root_logger.addHandler(logging.StreamHandler())
+root_logger.addHandler(
+    logging.handlers.TimedRotatingFileHandler(
+        filename=os.path.join(LOG_DIR, "mcp-server.log"),
+        when="midnight",
+        backupCount=30,
+        encoding="utf-8",
+    )
 )
+
+for handler in root_logger.handlers:
+    handler.setFormatter(log_formatter)
+
 log = logging.getLogger(__name__)
 
 MCP_HOST = os.getenv("MCP_HOST")
