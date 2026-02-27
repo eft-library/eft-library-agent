@@ -78,7 +78,6 @@ async def run_rag_pipeline(
         source_table=source_table,
     )
     context = build_context(docs)
-    log.info(f"[rag_pipeline] context:\n{context}")
 
     # 4. LLM 호출 (히스토리 + 새 질문)
     messages = [*history, ChatMessage(role="user", content=user_query)]
@@ -135,7 +134,6 @@ async def run_rag_pipeline_stream(
         source_table=source_table,
     )
     context = build_context(docs)
-    log.info(f"[rag_pipeline] context:\n{context}")
 
     # 4. docs 메타정보 먼저 yield (Next.js에서 출처 표시용)
     import json
