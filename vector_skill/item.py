@@ -1,6 +1,7 @@
 """
-item_i18n + item_detail_i18n 배치 임베딩 스크립트
+item_i18n + item_detail_i18n + hideout_crafts_i18n 배치 임베딩 스크립트
 - item_i18n + item_detail_i18n joined
+- hideout_crafts_i18n 제작 레시피 추가
 - 카테고리별 info 파서 분리
 - asyncio 동시 처리 (CONCURRENT_LIMIT)
 - 이미 처리된 아이템 스킵 (재시작 안전)
@@ -336,6 +337,46 @@ DETAIL_LABELS = {
 
 NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
 
+# 제작 레시피 레이블
+CRAFT_LABELS = {
+    "ko": {
+        "title": "제작 레시피",
+        "result": "결과물",
+        "duration": "제작 시간",
+        "required": "필요 재료",
+        "min": "분",
+        "hour": "시간",
+    },
+    "en": {
+        "title": "Craft Recipe",
+        "result": "Result",
+        "duration": "Duration",
+        "required": "Required Items",
+        "min": "min",
+        "hour": "h",
+    },
+    "ja": {
+        "title": "クラフトレシピ",
+        "result": "結果",
+        "duration": "製作時間",
+        "required": "必要素材",
+        "min": "分",
+        "hour": "時間",
+    },
+}
+
+
+def format_duration(seconds: int, lang: str) -> str:
+    lb = CRAFT_LABELS[lang]
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}{lb['min']}"
+    hours = minutes // 60
+    remaining = minutes % 60
+    if remaining == 0:
+        return f"{hours}{lb['hour']}"
+    return f"{hours}{lb['hour']} {remaining}{lb['min']}"
+
 
 def parse_detail(detail: dict | None, lang: str) -> str:
     if not detail:
@@ -443,6 +484,34 @@ def parse_detail(detail: dict | None, lang: str) -> str:
     return "\n\n".join(parts)
 
 
+def build_craft_text(crafts: list[dict], lang: str) -> str:
+    """hideout_crafts_i18n에서 해당 아이템이 결과물인 레시피 목록"""
+    if not crafts:
+        return ""
+    lb = CRAFT_LABELS[lang]
+    nk = NAME_KEY[lang]
+    lines = []
+
+    for c in crafts:
+        duration_sec = int(c.get("duration") or 0)
+        duration_str = format_duration(duration_sec, lang)
+        qty = c.get("quantity", 1)
+        name = get_lang_value(c.get("name"), lang)
+        req_items = parse_jsonb(c.get("req_item")) or []
+        req_str = "\n".join(
+            f"  · {r['item'].get(nk, '')} x{r.get('quantity', 1)}"
+            for r in req_items
+            if r.get("item")
+        )
+        lines.append(
+            f"{lb['result']}: {name} x{qty}\n"
+            f"{lb['duration']}: {duration_str}\n"
+            f"{lb['required']}:\n{req_str}"
+        )
+
+    return f"[{lb['title']}]\n" + "\n\n".join(lines)
+
+
 # content 조합
 CATEGORY_LABEL = {
     "ko": "카테고리",
@@ -461,7 +530,12 @@ ITEM_LABEL = {
 }
 
 
-def build_content(item_row: dict, detail_row: dict | None, lang: str) -> str:
+def build_content(
+    item_row: dict,
+    detail_row: dict | None,
+    lang: str,
+    crafts: list[dict] | None = None,
+) -> str:
     name = get_lang_value(item_row["name"], lang)
     category = item_row.get("category") or ""
     info = parse_jsonb(item_row.get("info")) or {}
@@ -501,6 +575,11 @@ def build_content(item_row: dict, detail_row: dict | None, lang: str) -> str:
         detail_text = parse_detail(detail, lang).strip()
         if detail_text:
             parts.append(f"\n{detail_text}")
+
+    # 제작 레시피 (hideout_crafts_i18n)
+    craft_text = build_craft_text(crafts or [], lang).strip()
+    if craft_text:
+        parts.append(f"\n{craft_text}")
 
     return "\n".join(parts).strip()
 
@@ -553,12 +632,13 @@ async def process_item(
     semaphore: asyncio.Semaphore,
     item_row: dict,
     detail_row: dict | None,
+    crafts: list[dict] | None = None,
 ):
     item_id = item_row["id"]
 
     async with semaphore:
         for lang in LANGS:
-            content = build_content(item_row, detail_row, lang)
+            content = build_content(item_row, detail_row, lang, crafts)
 
             if not content.strip():
                 log.warning(f"  ⚠ 빈 content 스킵: {item_id} [{lang}]")
@@ -569,7 +649,11 @@ async def process_item(
 
                 metadata = {
                     "content_type": "joined",
-                    "source_tables": ["item_i18n", "item_detail_i18n"],
+                    "source_tables": [
+                        "item_i18n",
+                        "item_detail_i18n",
+                        "hideout_crafts_i18n",
+                    ],
                     "item_id": item_id,
                     "item_name": {
                         "ko": get_lang_value(item_row["name"], "ko"),
@@ -579,16 +663,6 @@ async def process_item(
                     "category": item_row.get("category") or "",
                     "url": f"https://eftlibrary.com/item/info/{item_row.get('url_mapping') or item_id}",
                 }
-
-                # ── 확인용 출력 ──────────────────────────────────────
-                # print(f"\n{'='*60}")
-                # print(f"[{item_id}] [{lang}]")
-                # print(f"{'─'*60}")
-                # print(f"[content]\n{content}")
-                # print(f"{'─'*60}")
-                # print(f"[embedding] 차원: {len(embedding)} | 앞 5개: {embedding[:5]}")
-                # print(f"{'='*60}")
-                # ────────────────────────────────────────────────────
 
                 async with pool.acquire() as conn:
                     await upsert_rag_document(
@@ -612,7 +686,6 @@ async def main():
         f"모델: {EMBED_MODEL} | 동시처리: {CONCURRENT_LIMIT} | 기존 스킵: {SKIP_EXISTING}"
     )
 
-    # 커넥션 풀 사용 (동시 처리 시 커넥션 충돌 방지)
     pool = await asyncpg.create_pool(
         DATABASE_URL, min_size=2, max_size=CONCURRENT_LIMIT + 2
     )
@@ -654,16 +727,13 @@ async def main():
             if not item_rows:
                 break
 
-            # 배치 내 아이템 ID 목록
             batch_ids = [r["id"] for r in item_rows]
-
-            # 스킵 필터
             target_ids = [id for id in batch_ids if id not in existing_ids]
             if not target_ids:
                 offset += BATCH_SIZE
                 continue
 
-            # item_detail 한번에 조회
+            # item_detail 조회
             async with pool.acquire() as conn:
                 detail_rows = await conn.fetch(
                     """
@@ -675,16 +745,35 @@ async def main():
                 """,
                     target_ids,
                 )
-
             detail_map = {r["id"]: dict(r) for r in detail_rows}
+
+            # hideout_crafts_i18n 조회 (해당 아이템이 결과물인 레시피)
+            async with pool.acquire() as conn:
+                craft_rows = await conn.fetch(
+                    """
+                    SELECT reward_item_id, level, duration, quantity, req_item, name
+                    FROM hideout_crafts_i18n
+                    WHERE reward_item_id = ANY($1)
+                """,
+                    target_ids,
+                )
+            craft_map: dict[str, list[dict]] = {}
+            for r in craft_rows:
+                craft_map.setdefault(r["reward_item_id"], []).append(dict(r))
 
             log.info(
                 f"배치 처리중: {offset + 1} ~ {offset + len(item_rows)} / {total} | 대상: {len(target_ids)}개"
             )
 
-            # 동시 처리 (pool을 넘겨서 각 태스크가 개별 커넥션 획득)
             tasks = [
-                process_item(pool, client, semaphore, dict(r), detail_map.get(r["id"]))
+                process_item(
+                    pool,
+                    client,
+                    semaphore,
+                    dict(r),
+                    detail_map.get(r["id"]),
+                    craft_map.get(r["id"]),
+                )
                 for r in item_rows
                 if r["id"] in target_ids
             ]
