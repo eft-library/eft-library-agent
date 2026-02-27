@@ -2,19 +2,21 @@
 MCP Server 진입점 - FastMCP SSE 방식
 """
 
-from fastapi import FastAPI
 from fastmcp import FastMCP
 from schemas.models import ChatMessage
 from tools.retriever import search_rag as _search_rag
 from tools.llm import chat_llm as _chat_llm
 from tools.history import save_message as _save_message, get_history as _get_history
 from db.connection import get_pool
-from routers import chat as chat_router
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from services.rag import run_rag_pipeline
 import logging.handlers
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -37,17 +39,32 @@ log = logging.getLogger(__name__)
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", "8001"))
 
-# FastAPI 앱 (HTTP 엔드포인트용)
-app = FastAPI(title="EFT Library RAG API")
-app.include_router(chat_router.router, prefix="/rag")
-
 # FastMCP (MCP SSE용)
 mcp = FastMCP("eftlibrary-rag")
 
 
-# ─────────────────────────────────────────
+# HTTP 엔드포인트 (FastAPI에서 호출용)
+@mcp.custom_route("/rag/chat", methods=["POST"])
+async def rag_chat(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        result = await run_rag_pipeline(
+            session_id=body["session_id"],
+            user_query=body["query"],
+            lang=body.get("lang", "ko"),
+            rag_limit=body.get("rag_limit", 5),
+            history_limit=body.get("history_limit", 10),
+            source_table=body.get("source_table"),
+        )
+        return JSONResponse(result)
+    except KeyError as e:
+        return JSONResponse({"detail": f"필수 파라미터 누락: {e}"}, status_code=422)
+    except Exception as e:
+        log.error(f"[rag_chat] error: {e}")
+        return JSONResponse({"detail": str(e)}, status_code=500)
+
+
 # Tool 1: search_rag
-# ─────────────────────────────────────────
 @mcp.tool()
 async def search_rag(
     query: str,
@@ -70,9 +87,7 @@ async def search_rag(
     return [d.model_dump() for d in docs]
 
 
-# ─────────────────────────────────────────
 # Tool 2: chat_llm
-# ─────────────────────────────────────────
 @mcp.tool()
 async def chat_llm(
     messages: list[dict],
@@ -89,9 +104,7 @@ async def chat_llm(
     return await _chat_llm(messages=chat_messages, context=context)
 
 
-# ─────────────────────────────────────────
 # Tool 3: save_message
-# ─────────────────────────────────────────
 @mcp.tool()
 async def save_message(
     session_id: str,
@@ -119,9 +132,7 @@ async def save_message(
     )
 
 
-# ─────────────────────────────────────────
 # Tool 4: get_history
-# ─────────────────────────────────────────
 @mcp.tool()
 async def get_history(
     session_id: str,
@@ -138,12 +149,9 @@ async def get_history(
     return [m.model_dump() for m in messages]
 
 
-# ─────────────────────────────────────────
 # 실행
-# ─────────────────────────────────────────
 if __name__ == "__main__":
     import asyncio
-    import uvicorn
 
     async def startup():
         await get_pool()
@@ -152,9 +160,4 @@ if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(startup())
 
     log.info(f"MCP Server 시작: {MCP_HOST}:{MCP_PORT}")
-
-    # FastAPI + FastMCP SSE 같이 실행
-    # FastMCP SSE는 내부적으로 uvicorn을 띄우므로
-    # FastAPI app을 mcp에 마운트해서 단일 포트로 운영
-    mcp.mount("/api", app)
     mcp.run(transport="sse", host=MCP_HOST, port=MCP_PORT)
