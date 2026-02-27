@@ -26,7 +26,7 @@ async def chat_llm(
     context: str = "",
     lang: str = "ko",
 ) -> str:
-    system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["en"])
+    system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["ko"])
     if context:
         system += f"\n\n[참고 문서]\n{context}"
 
@@ -60,8 +60,9 @@ async def chat_llm(
 async def chat_llm_stream(
     messages: list[ChatMessage],
     context: str = "",
+    lang: str = "ko",
 ):
-    system = SYSTEM_PROMPT
+    system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["ko"])
     if context:
         system += f"\n\n[참고 문서]\n{context}"
 
