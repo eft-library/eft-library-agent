@@ -53,11 +53,11 @@ async def lifespan(server):
 
 
 # FastMCP (MCP SSE용)
-mcp = FastMCP("eftlibrary-rag", lifespan=lifespan)
+mcp = FastMCP("eft-library-rag", lifespan=lifespan)
 
 
 # HTTP 엔드포인트 (FastAPI에서 호출용)
-@mcp.custom_route("/rag/chat", methods=["POST"])
+@mcp.custom_route("/api/rag/chat", methods=["POST"])
 async def rag_chat(request: Request) -> JSONResponse:
     try:
         body = await request.json()
