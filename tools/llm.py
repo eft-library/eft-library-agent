@@ -56,7 +56,7 @@ async def chat_llm(
         ],
         "stream": False,
         "options": {
-            "temperature": 0,
+            "temperature": 0.1,
             "num_ctx": 8192,
         },
     }
@@ -95,7 +95,7 @@ async def chat_llm_stream(
         ],
         "stream": True,  # ← 스트리밍 켜기
         "options": {
-            "temperature": 0,
+            "temperature": 0.1,
             "num_ctx": 8192,
         },
     }
