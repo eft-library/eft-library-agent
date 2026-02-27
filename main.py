@@ -1,7 +1,9 @@
 """
-MCP Server 진입점 - FastMCP SSE 방식
+MCP Server 진입점 - FastMCP 방식
 """
 
+import os
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 from schemas.models import ChatMessage
 from tools.retriever import search_rag as _search_rag
@@ -11,14 +13,12 @@ from db.connection import get_pool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from services.rag import run_rag_pipeline
+from contextlib import asynccontextmanager
 import logging.handlers
-import os
-from dotenv import load_dotenv
 
 load_dotenv()
 
-
-LOG_DIR = os.getenv("LOG_DIR", "logs")
+LOG_DIR = os.getenv("LOG_DIR")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 logging.basicConfig(
@@ -36,15 +36,28 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
-MCP_PORT = int(os.getenv("MCP_PORT", "8001"))
+MCP_HOST = os.getenv("MCP_HOST")
+MCP_PORT = int(os.getenv("MCP_PORT"))
+
+
+# Lifespan - DB 풀 초기화
+@asynccontextmanager
+async def lifespan(server):
+    await get_pool()
+    log.info("DB 풀 초기화 완료")
+    yield
+    from db.connection import close_pool
+
+    await close_pool()
+    log.info("DB 풀 종료 완료")
+
 
 # FastMCP (MCP SSE용)
-mcp = FastMCP("eftlibrary-rag")
+mcp = FastMCP("eftlibrary-rag", lifespan=lifespan)
 
 
 # HTTP 엔드포인트 (FastAPI에서 호출용)
-@mcp.custom_route("/api/rag/chat", methods=["POST"])
+@mcp.custom_route("/rag/chat", methods=["POST"])
 async def rag_chat(request: Request) -> JSONResponse:
     try:
         body = await request.json()
@@ -140,7 +153,6 @@ async def get_history(
 ) -> list[dict]:
     """
     세션의 대화 히스토리를 조회합니다.
-
     Args:
         session_id: 채팅 세션 UUID
         limit:      가져올 최근 메시지 수 (기본 10)
@@ -151,13 +163,5 @@ async def get_history(
 
 # 실행
 if __name__ == "__main__":
-    import asyncio
-
-    async def startup():
-        await get_pool()
-        log.info("DB 풀 초기화 완료")
-
-    asyncio.get_event_loop().run_until_complete(startup())
-
     log.info(f"MCP Server 시작: {MCP_HOST}:{MCP_PORT}")
     mcp.run(transport="sse", host=MCP_HOST, port=MCP_PORT)
