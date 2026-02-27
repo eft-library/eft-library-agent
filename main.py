@@ -2,20 +2,19 @@
 MCP Server 진입점 - FastMCP SSE 방식
 """
 
-import logging
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
+from fastapi import FastAPI
 from fastmcp import FastMCP
 from schemas.models import ChatMessage
 from tools.retriever import search_rag as _search_rag
 from tools.llm import chat_llm as _chat_llm
 from tools.history import save_message as _save_message, get_history as _get_history
 from db.connection import get_pool
-
+from routers import chat as chat_router
 import logging.handlers
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -35,10 +34,15 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-MCP_HOST = os.getenv("MCP_HOST")
-MCP_PORT = int(os.getenv("MCP_PORT"))
+MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
+MCP_PORT = int(os.getenv("MCP_PORT", "8001"))
 
-mcp = FastMCP("eft-library-rag")
+# FastAPI 앱 (HTTP 엔드포인트용)
+app = FastAPI(title="EFT Library RAG API")
+app.include_router(chat_router.router, prefix="/rag")
+
+# FastMCP (MCP SSE용)
+mcp = FastMCP("eftlibrary-rag")
 
 
 # ─────────────────────────────────────────
@@ -138,10 +142,19 @@ async def get_history(
 # 실행
 # ─────────────────────────────────────────
 if __name__ == "__main__":
-    # DB 풀 초기화
     import asyncio
+    import uvicorn
 
-    asyncio.get_event_loop().run_until_complete(get_pool())
+    async def startup():
+        await get_pool()
+        log.info("DB 풀 초기화 완료")
+
+    asyncio.get_event_loop().run_until_complete(startup())
 
     log.info(f"MCP Server 시작: {MCP_HOST}:{MCP_PORT}")
+
+    # FastAPI + FastMCP SSE 같이 실행
+    # FastMCP SSE는 내부적으로 uvicorn을 띄우므로
+    # FastAPI app을 mcp에 마운트해서 단일 포트로 운영
+    mcp.mount("/api", app)
     mcp.run(transport="sse", host=MCP_HOST, port=MCP_PORT)
