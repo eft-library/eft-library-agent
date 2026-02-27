@@ -14,8 +14,8 @@ from tools.llm import chat_llm as _chat_llm
 from tools.history import save_message as _save_message, get_history as _get_history
 from db.connection import get_pool
 from starlette.requests import Request
-from starlette.responses import JSONResponse
-from services.rag import run_rag_pipeline
+from starlette.responses import JSONResponse, StreamingResponse
+from services.rag import run_rag_pipeline, run_rag_pipeline_stream
 from contextlib import asynccontextmanager
 import logging.handlers
 
@@ -83,6 +83,32 @@ async def rag_chat(request: Request) -> JSONResponse:
         return JSONResponse({"detail": f"필수 파라미터 누락: {e}"}, status_code=422)
     except Exception as e:
         log.error(f"[rag_chat] error: {e}")
+        return JSONResponse({"detail": str(e)}, status_code=500)
+
+
+@mcp.custom_route("/api/rag/chat/stream", methods=["POST"])
+async def rag_chat_stream(request: Request) -> StreamingResponse:
+    try:
+        body = await request.json()
+        return StreamingResponse(
+            run_rag_pipeline_stream(
+                session_id=body["session_id"],
+                user_query=body["query"],
+                lang=body.get("lang", "ko"),
+                rag_limit=body.get("rag_limit", 5),
+                history_limit=body.get("history_limit", 10),
+                source_table=body.get("source_table"),
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # nginx 사용 시 버퍼링 방지
+            },
+        )
+    except KeyError as e:
+        return JSONResponse({"detail": f"필수 파라미터 누락: {e}"}, status_code=422)
+    except Exception as e:
+        log.error(f"[rag_chat_stream] error: {e}")
         return JSONResponse({"detail": str(e)}, status_code=500)
 
 

@@ -46,3 +46,48 @@ async def chat_llm(
     answer = result["message"]["content"]
     log.info(f"[llm] model={CHAT_MODEL} tokens={result.get('eval_count', '?')}")
     return answer
+
+
+async def chat_llm_stream(
+    messages: list[ChatMessage],
+    context: str = "",
+):
+    system = SYSTEM_PROMPT
+    if context:
+        system += f"\n\n[참고 문서]\n{context}"
+
+    payload = {
+        "model": CHAT_MODEL,
+        "messages": [
+            {"role": "system", "content": system},
+            *[{"role": m.role, "content": m.content} for m in messages],
+        ],
+        "stream": True,  # ← 스트리밍 켜기
+        "options": {
+            "temperature": 0.3,
+            "num_ctx": 8192,
+        },
+    }
+
+    async with httpx.AsyncClient() as client:
+        async with client.stream(
+            "POST",
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json=payload,
+            timeout=120.0,
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line:
+                    continue
+                import json
+
+                data = json.loads(line)
+                token = data.get("message", {}).get("content", "")
+                if token:
+                    yield token
+                if data.get("done"):
+                    log.info(
+                        f"[llm] model={CHAT_MODEL} tokens={data.get('eval_count', '?')}"
+                    )
+                    break
