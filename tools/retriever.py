@@ -1,10 +1,13 @@
 import json
 import logging
+import os
 from db.connection import get_pool
 from tools.embedder import get_embedding
 from schemas.models import RagDocument
 
 log = logging.getLogger(__name__)
+
+IVF_PROBES = int(os.getenv("IVF_PROBES"))
 
 
 async def search_rag(
@@ -18,6 +21,8 @@ async def search_rag(
 
     pool = await get_pool()
     async with pool.acquire() as conn:
+        await conn.execute(f"SET LOCAL ivfflat.probes = {IVF_PROBES}")
+
         if source_table:
             rows = await conn.fetch(
                 """
@@ -68,9 +73,14 @@ async def search_rag(
         )
 
     log.info(f"[retriever] query={query[:30]}... lang={lang} results={len(results)}")
-    log.info(f"[retriever] 검색 결과:")
     for r in results:
-        log.info(
-            f"  {r.source_table} | {r.metadata.get('quest_name', {}).get('ko', '')} | similarity={r.similarity}"
+        name = (
+            r.metadata.get("quest_name")
+            or r.metadata.get("boss_name")
+            or r.metadata.get("item_name")
+            or ""
         )
+        if isinstance(name, dict):
+            name = name.get(lang, "")
+        log.info(f"  {r.source_table} | {name} | similarity={r.similarity}")
     return results
