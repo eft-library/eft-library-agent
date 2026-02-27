@@ -8,16 +8,25 @@ log = logging.getLogger(__name__)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
 CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
 
-SYSTEM_PROMPT = """당신은 Escape from Tarkov 게임 전문 도우미입니다.
+SYSTEM_PROMPTS = {
+    "ko": """당신은 Escape from Tarkov 게임 전문 도우미입니다.
 주어진 참고 문서를 바탕으로 정확하고 친절하게 답변하세요.
-참고 문서에 없는 내용은 모른다고 솔직하게 말하세요."""
+참고 문서에 없는 내용은 모른다고 솔직하게 말하세요.""",
+    "en": """You are an expert assistant for the game Escape from Tarkov.
+Answer accurately and helpfully based on the provided reference documents.
+If the information is not in the documents, honestly say you don't know.""",
+    "ja": """あなたはEscape from Tarkovゲームの専門アシスタントです。
+提供された参考文書に基づいて、正確かつ丁寧に回答してください。
+文書にない内容については、わからないと正直に答えてください。""",
+}
 
 
 async def chat_llm(
     messages: list[ChatMessage],
     context: str = "",
+    lang: str = "ko",
 ) -> str:
-    system = SYSTEM_PROMPT
+    system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["en"])
     if context:
         system += f"\n\n[참고 문서]\n{context}"
 
