@@ -19,6 +19,23 @@ def build_context(docs: list[RagDocument]) -> str:
     return "\n\n".join(parts)
 
 
+async def extract_search_query(user_query: str, lang: str = "ko") -> str:
+    """LLM으로 검색에 최적화된 키워드 추출"""
+    messages = [
+        ChatMessage(
+            role="user",
+            content=f"""다음 질문에서 검색 키워드만 추출해줘. 
+조사, 서술어, 부가 설명 없이 핵심 명사/고유명사만.
+한 줄로만 답해.
+
+질문: {user_query}
+키워드:""",
+        )
+    ]
+    result = await chat_llm(messages=messages, context="")
+    return result.strip()
+
+
 async def run_rag_pipeline(
     session_id: str,
     user_query: str,
@@ -93,9 +110,13 @@ async def run_rag_pipeline_stream(
     # 2. 사용자 메시지 저장
     await save_message(session_id, "user", user_query, lang)
 
+    # 검색 쿼리 정제
+    search_query = await extract_search_query(user_query, lang)
+    log.info(f"[rag_pipeline] 원본={user_query} → 검색쿼리={search_query}")
+
     # 3. RAG 검색
     docs = await search_rag(
-        query=user_query,
+        query=search_query,
         lang=lang,
         limit=rag_limit,
         source_table=source_table,
