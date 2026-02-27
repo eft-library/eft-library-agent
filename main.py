@@ -26,19 +26,18 @@ log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
-
-# 기존 핸들러 제거
 root_logger.handlers.clear()
 
-root_logger.addHandler(logging.StreamHandler())
-root_logger.addHandler(
-    logging.handlers.TimedRotatingFileHandler(
-        filename=os.path.join(LOG_DIR, "mcp-server.log"),
-        when="midnight",
-        backupCount=30,
-        encoding="utf-8",
-    )
+file_handler = logging.handlers.TimedRotatingFileHandler(
+    filename=os.path.join(LOG_DIR, "mcp-server.log"),
+    when="midnight",
+    backupCount=30,
+    encoding="utf-8",
 )
+file_handler.setFormatter(log_formatter)
+root_logger.addHandler(file_handler)
+
+log = logging.getLogger(__name__)
 
 for handler in root_logger.handlers:
     handler.setFormatter(log_formatter)
