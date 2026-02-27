@@ -30,15 +30,6 @@ async def save_message(
             lang,
             json.dumps(source_docs or [], ensure_ascii=False),
         )
-        # 세션 updated_at 갱신
-        await conn.execute(
-            """
-            UPDATE chat_sessions
-            SET updated_at = NOW()
-            WHERE session_id = $1::uuid
-        """,
-            session_id,
-        )
 
     log.info(f"[history] save session={session_id} role={role} id={row['id']}")
     return {"id": row["id"], "created_at": row["created_at"].isoformat()}
