@@ -52,7 +52,7 @@ async def run_rag_pipeline(
 
     # 4. LLM 호출 (히스토리 + 새 질문)
     messages = [*history, ChatMessage(role="user", content=user_query)]
-    answer = await chat_llm(messages=messages, context=context)
+    answer = await chat_llm(messages=messages, context=context, lang=lang)
 
     # 5. 어시스턴트 메시지 저장
     source_docs = [
@@ -118,7 +118,7 @@ async def run_rag_pipeline_stream(
     # 5. LLM 스트리밍
     messages = [*history, ChatMessage(role="user", content=user_query)]
     full_answer = ""
-    async for token in chat_llm_stream(messages=messages, context=context):
+    async for token in chat_llm_stream(messages=messages, context=context, lang=lang):
         full_answer += token
         yield f"data: {json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
 
