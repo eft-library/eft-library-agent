@@ -1,4 +1,5 @@
 import httpx
+import json
 import logging
 import os
 from schemas.models import ChatMessage
@@ -80,24 +81,29 @@ IMPORTANT: You MUST respond in English only. Do not use any other language.""",
 }
 
 
+def _build_messages(messages: list[ChatMessage], context: str) -> list[dict]:
+    """context를 마지막 user 메시지에 직접 주입"""
+    msg_list = [{"role": m.role, "content": m.content} for m in messages]
+    if context and msg_list and msg_list[-1]["role"] == "user":
+        msg_list[-1][
+            "content"
+        ] = f"[참고 문서]\n{context}\n\n질문: {msg_list[-1]['content']}"
+    return msg_list
+
+
 async def chat_llm(
     messages: list[ChatMessage],
     context: str = "",
     lang: str = "ko",
 ) -> str:
     system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["ko"])
-
-    msg_list = [{"role": m.role, "content": m.content} for m in messages]
-    if context and msg_list:
-        last = msg_list[-1]
-        if last["role"] == "user":
-            last["content"] = f"[참고 문서]\n{context}\n\n질문: {last['content']}"
+    msg_list = _build_messages(messages, context)
 
     payload = {
         "model": CHAT_MODEL,
         "messages": [
             {"role": "system", "content": system},
-            *[{"role": m.role, "content": m.content} for m in messages],
+            *msg_list,
         ],
         "stream": False,
         "options": {
@@ -126,19 +132,15 @@ async def chat_llm_stream(
     lang: str = "ko",
 ):
     system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["ko"])
-    msg_list = [{"role": m.role, "content": m.content} for m in messages]
-    if context and msg_list:
-        last = msg_list[-1]
-        if last["role"] == "user":
-            last["content"] = f"[참고 문서]\n{context}\n\n질문: {last['content']}"
+    msg_list = _build_messages(messages, context)
 
     payload = {
         "model": CHAT_MODEL,
         "messages": [
             {"role": "system", "content": system},
-            *[{"role": m.role, "content": m.content} for m in messages],
+            *msg_list,
         ],
-        "stream": True,  # ← 스트리밍 켜기
+        "stream": True,
         "options": {
             "temperature": 0.1,
             "num_ctx": 8192,
@@ -156,14 +158,12 @@ async def chat_llm_stream(
             async for line in resp.aiter_lines():
                 if not line:
                     continue
-                import json
-
                 data = json.loads(line)
                 token = data.get("message", {}).get("content", "")
                 if token:
                     yield token
                 if data.get("done"):
                     log.info(
-                        f"[llm] model={CHAT_MODEL} tokens={data.get('eval_count', '?')}"
+                        f"[llm_stream] model={CHAT_MODEL} tokens={data.get('eval_count', '?')}"
                     )
                     break
