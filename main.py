@@ -60,6 +60,7 @@ mcp = FastMCP("eft-library-rag", lifespan=lifespan)
 # HTTP 엔드포인트 (FastAPI에서 호출용)
 @mcp.custom_route("/api/rag/chat", methods=["POST"])
 async def rag_chat(request: Request) -> JSONResponse:
+    log.warning("=== rag_chat 진입 ===")
     try:
         body = await request.json()
         result = await run_rag_pipeline(
