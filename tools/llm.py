@@ -32,8 +32,12 @@ async def chat_llm(
     lang: str = "ko",
 ) -> str:
     system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["ko"])
-    if context:
-        system += f"\n\n[참고 문서]\n{context}"
+
+    msg_list = [{"role": m.role, "content": m.content} for m in messages]
+    if context and msg_list:
+        last = msg_list[-1]
+        if last["role"] == "user":
+            last["content"] = f"[참고 문서]\n{context}\n\n질문: {last['content']}"
 
     payload = {
         "model": CHAT_MODEL,
@@ -68,8 +72,11 @@ async def chat_llm_stream(
     lang: str = "ko",
 ):
     system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["ko"])
-    if context:
-        system += f"\n\n[참고 문서]\n{context}"
+    msg_list = [{"role": m.role, "content": m.content} for m in messages]
+    if context and msg_list:
+        last = msg_list[-1]
+        if last["role"] == "user":
+            last["content"] = f"[참고 문서]\n{context}\n\n질문: {last['content']}"
 
     payload = {
         "model": CHAT_MODEL,
