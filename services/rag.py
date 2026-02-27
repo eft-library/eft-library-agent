@@ -21,17 +21,29 @@ def build_context(docs: list[RagDocument]) -> str:
 
 async def extract_search_query(user_query: str, lang: str = "ko") -> str:
     """LLM으로 검색에 최적화된 키워드 추출"""
-    messages = [
-        ChatMessage(
-            role="user",
-            content=f"""다음 질문에서 검색 키워드만 추출해줘. 
-조사, 서술어, 부가 설명 없이 핵심 명사/고유명사만.
-한 줄로만 답해.
+    EXTRACT_PROMPTS = {
+        "ko": """다음 질문에서 검색 키워드만 추출해줘.
+    조사, 서술어, 부가 설명 없이 핵심 명사/고유명사만.
+    한 줄로만 답해.
 
-질문: {user_query}
-키워드:""",
-        )
-    ]
+    질문: {query}
+    키워드:""",
+        "en": """Extract only the search keywords from the following question.
+    Only core nouns and proper nouns, no articles or verbs.
+    Answer in one line only.
+
+    Question: {query}
+    Keywords:""",
+        "ja": """次の質問から検索キーワードのみを抽出してください。
+    助詞、述語、補足説明なしで、核心的な名詞・固有名詞のみ。
+    一行のみで答えてください。
+
+    質問: {query}
+    キーワード:""",
+    }
+
+    prompt = EXTRACT_PROMPTS.get(lang, EXTRACT_PROMPTS["ko"]).format(query=user_query)
+    messages = [ChatMessage(role="user", content=prompt)]
     result = await chat_llm(messages=messages, context="")
     return result.strip()
 
