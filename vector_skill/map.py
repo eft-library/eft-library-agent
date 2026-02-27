@@ -21,8 +21,8 @@ load_dotenv()
 
 # 설정
 DATABASE_URL = os.getenv("DATABASE_URL")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
+EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "10"))
 LANGS = ["ko", "en", "ja"]
 

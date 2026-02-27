@@ -4,6 +4,9 @@ MCP Server 진입점 - FastMCP 방식
 
 import os
 from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastmcp import FastMCP
 from schemas.models import ChatMessage
 from tools.retriever import search_rag as _search_rag
@@ -15,8 +18,6 @@ from starlette.responses import JSONResponse
 from services.rag import run_rag_pipeline
 from contextlib import asynccontextmanager
 import logging.handlers
-
-load_dotenv()
 
 LOG_DIR = os.getenv("LOG_DIR")
 os.makedirs(LOG_DIR, exist_ok=True)
