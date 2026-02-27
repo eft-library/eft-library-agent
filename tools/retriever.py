@@ -68,4 +68,9 @@ async def search_rag(
         )
 
     log.info(f"[retriever] query={query[:30]}... lang={lang} results={len(results)}")
+    log.info(f"[retriever] 검색 결과:")
+    for r in results:
+        log.info(
+            f"  {r.source_table} | {r.metadata.get('quest_name', {}).get('ko', '')} | similarity={r.similarity}"
+        )
     return results
