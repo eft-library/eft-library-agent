@@ -1,8 +1,9 @@
 """
-map_group_i18n + extraction_i18n 배치 임베딩 스크립트
+map_group_i18n + extraction_i18n + transit_i18n 배치 임베딩 스크립트
 - map_group_i18n depth 1 (최상위 지도) 단위로 묶어서 임베딩
 - 하위 구역(depth 2) 목록 포함
 - 해당 지도의 탈출구 전체 포함
+- 해당 지도의 트랜짓 전체 포함
 - bge-m3로 임베딩 생성
 - rag_documents 테이블에 upsert
 """
@@ -103,6 +104,8 @@ LANG_LABELS = {
         "sub_areas": "구역 목록",
         "extractions": "탈출구 목록",
         "extraction": "탈출구",
+        "transits": "트랜짓 목록",
+        "transit": "트랜짓",
         "faction": "소속",
         "always_available": "항상 열림",
         "single_use": "1회용",
@@ -116,6 +119,8 @@ LANG_LABELS = {
         "sub_areas": "Sub Areas",
         "extractions": "Extraction Points",
         "extraction": "Extraction",
+        "transits": "Transit Points",
+        "transit": "Transit",
         "faction": "Faction",
         "always_available": "Always Available",
         "single_use": "Single Use",
@@ -129,6 +134,8 @@ LANG_LABELS = {
         "sub_areas": "エリア一覧",
         "extractions": "脱出ポイント一覧",
         "extraction": "脱出ポイント",
+        "transits": "トランジット一覧",
+        "transit": "トランジット",
         "faction": "所属",
         "always_available": "常時利用可能",
         "single_use": "一回限り",
@@ -140,8 +147,14 @@ LANG_LABELS = {
 }
 
 
-def build_content(map_row: dict, sub_areas: list, extractions: list, lang: str) -> str:
-    """지도 + 구역 + 탈출구 조합 텍스트 생성"""
+def build_content(
+    map_row: dict,
+    sub_areas: list,
+    extractions: list,
+    transits: list,
+    lang: str,
+) -> str:
+    """지도 + 구역 + 탈출구 + 트랜짓 조합 텍스트 생성"""
     label = LANG_LABELS[lang]
     map_name = get_lang_value(map_row["name"], lang)
 
@@ -182,6 +195,32 @@ def build_content(map_row: dict, sub_areas: list, extractions: list, lang: str) 
             ext_parts.append("\n".join(lines))
 
         parts.append(f"\n[{label['extractions']}]\n" + "\n\n".join(ext_parts))
+
+    # 트랜짓 목록
+    if transits:
+        transit_parts = []
+        for tr in transits:
+            tr_name = get_lang_value(tr["name"], lang)
+            faction = tr.get("faction") or ""
+            always = label["yes"] if tr.get("always_available") else label["no"]
+            single = label["yes"] if tr.get("single_use") else label["no"]
+            requirements = clean_html(get_lang_value(tr.get("requirements"), lang))
+            tip = clean_html(get_lang_value(tr.get("tip"), lang))
+
+            lines = [f"{label['transit']}: {tr_name}"]
+            if faction:
+                lines.append(f"{label['faction']}: {faction}")
+            lines.append(
+                f"{label['always_available']}: {always} | {label['single_use']}: {single}"
+            )
+            if requirements:
+                lines.append(f"{label['requirements']}: {requirements}")
+            if tip:
+                lines.append(f"{label['tip']}: {tip}")
+
+            transit_parts.append("\n".join(lines))
+
+        parts.append(f"\n[{label['transits']}]\n" + "\n\n".join(transit_parts))
 
     return "\n".join(parts).strip()
 
@@ -234,11 +273,12 @@ async def process_map(
     map_row: dict,
     sub_areas: list,
     extractions: list,
+    transits: list,
 ):
     map_id = map_row["id"]
 
     for lang in LANGS:
-        content = build_content(map_row, sub_areas, extractions, lang)
+        content = build_content(map_row, sub_areas, extractions, transits, lang)
 
         if not content.strip():
             log.warning(f"  ⚠ 빈 content 스킵: {map_id} [{lang}]")
@@ -249,7 +289,7 @@ async def process_map(
 
             metadata = {
                 "content_type": "joined",
-                "source_tables": ["map_group_i18n", "extraction_i18n"],
+                "source_tables": ["map_group_i18n", "extraction_i18n", "transit_i18n"],
                 "map_id": map_id,
                 "map_name": {
                     "ko": get_lang_value(map_row["name"], "ko"),
@@ -258,6 +298,7 @@ async def process_map(
                 },
                 "sub_area_count": len(sub_areas),
                 "extraction_count": len(extractions),
+                "transit_count": len(transits),
                 "url": f"https://eftlibrary.com/map-of-tarkov/{map_id}",
             }
 
@@ -283,7 +324,7 @@ async def process_map(
 
 
 async def main():
-    log.info("=== map_group_i18n + extraction_i18n 배치 임베딩 시작 ===")
+    log.info("=== map_group_i18n + extraction_i18n + transit_i18n 배치 임베딩 시작 ===")
     log.info(f"모델: {EMBED_MODEL} | 언어: {LANGS}")
 
     conn = await asyncpg.connect(DATABASE_URL)
@@ -328,14 +369,30 @@ async def main():
                 map_id,
             )
 
-            sub_areas_list = [dict(r) for r in sub_areas]
-            extractions_list = [dict(r) for r in extractions]
-
-            log.info(
-                f"처리중: {map_id} | 구역 {len(sub_areas_list)}개 | 탈출구 {len(extractions_list)}개"
+            # 해당 지도 트랜짓 조회
+            transits = await conn.fetch(
+                """
+                SELECT id, name, faction, always_available, single_use,
+                       requirements, tip
+                FROM transit_i18n
+                WHERE map = $1
+                ORDER BY faction ASC, id ASC
+            """,
+                map_id,
             )
 
-            await process_map(conn, client, map_dict, sub_areas_list, extractions_list)
+            sub_areas_list = [dict(r) for r in sub_areas]
+            extractions_list = [dict(r) for r in extractions]
+            transits_list = [dict(r) for r in transits]
+
+            log.info(
+                f"처리중: {map_id} | 구역 {len(sub_areas_list)}개 | "
+                f"탈출구 {len(extractions_list)}개 | 트랜짓 {len(transits_list)}개"
+            )
+
+            await process_map(
+                conn, client, map_dict, sub_areas_list, extractions_list, transits_list
+            )
 
         log.info(f"=== 완료: {total}개 지도, {total * 3}개 row 생성/업데이트 ===")
 
