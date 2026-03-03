@@ -8,14 +8,14 @@ log = logging.getLogger(__name__)
 
 
 def build_context(docs: list[RagDocument]) -> str:
-    """검색된 문서들을 LLM context 문자열로 조합"""
     if not docs:
         return ""
     parts = []
-    log.info(docs)
     for i, doc in enumerate(docs, 1):
+        url = doc.metadata.get("url", "")
+        url_line = f"\n출처 URL: {url}" if url else ""
         parts.append(
-            f"[문서 {i}] (출처: {doc.source_table}, 유사도: {doc.similarity})\n{doc.content}"
+            f"[문서 {i}] (출처: {doc.source_table}, 유사도: {doc.similarity}){url_line}\n{doc.content}"
         )
     return "\n\n".join(parts)
 
