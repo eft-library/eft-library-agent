@@ -305,7 +305,7 @@ INFO_PARSERS = {
 DETAIL_LABELS = {
     "ko": {
         "hideout": "은신처 건설 필요",
-        "crafts": "제작 재료",
+        "crafts": "이 아이템이 재료로 사용되는 제작",
         "npc": "상인 교환",
         "quest_reward": "퀘스트 보상",
         "quest_item": "퀘스트 제출 아이템",
@@ -315,7 +315,7 @@ DETAIL_LABELS = {
     },
     "en": {
         "hideout": "Required for Hideout",
-        "crafts": "Used in Crafts",
+        "crafts": "Used as material in",
         "npc": "Barter (NPC)",
         "quest_reward": "Quest Reward",
         "quest_item": "Quest Item",
@@ -325,7 +325,7 @@ DETAIL_LABELS = {
     },
     "ja": {
         "hideout": "隠れ家建設に必要",
-        "crafts": "クラフト素材",
+        "crafts": "このアイテムが素材として使われるクラフト",
         "npc": "商人交換",
         "quest_reward": "クエスト報酬",
         "quest_item": "クエストアイテム",
@@ -340,7 +340,7 @@ NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
 # 제작 레시피 레이블
 CRAFT_LABELS = {
     "ko": {
-        "title": "제작 레시피",
+        "title": "이 아이템을 만드는 방법 (제작법)",
         "result": "결과물",
         "duration": "제작 시간",
         "required": "필요 재료",
@@ -348,7 +348,7 @@ CRAFT_LABELS = {
         "hour": "시간",
     },
     "en": {
-        "title": "Craft Recipe",
+        "title": "How to craft this item",
         "result": "Result",
         "duration": "Duration",
         "required": "Required Items",
@@ -356,7 +356,7 @@ CRAFT_LABELS = {
         "hour": "h",
     },
     "ja": {
-        "title": "クラフトレシピ",
+        "title": "このアイテムの製作方法",
         "result": "結果",
         "duration": "製作時間",
         "required": "必要素材",
