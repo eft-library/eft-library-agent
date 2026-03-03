@@ -12,7 +12,7 @@ def build_context(docs: list[RagDocument]) -> str:
     if not docs:
         return ""
     parts = []
-    print(docs)
+    log.info(docs)
     for i, doc in enumerate(docs, 1):
         parts.append(
             f"[문서 {i}] (출처: {doc.source_table}, 유사도: {doc.similarity})\n{doc.content}"
