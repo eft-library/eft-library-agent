@@ -106,6 +106,10 @@ async def chat_llm_stream(
     system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["ko"])
     msg_list = _build_messages(messages, context)
 
+    # 디버그 로그
+    log.info(f"[llm_stream] context 길이: {len(context)}")
+    log.info(f"[llm_stream] context 내용:\n{context[:1000]}")
+    log.info(f"[llm_stream] 최종 user 메시지:\n{msg_list[-1]['content'][:1000]}")
     payload = {
         "model": CHAT_MODEL,
         "messages": [
