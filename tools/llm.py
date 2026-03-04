@@ -75,7 +75,7 @@ async def chat_llm(
     payload = {
         "model": CHAT_MODEL,
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": f"/no_think\n{system}"},
             *msg_list,
         ],
         "stream": False,
@@ -107,14 +107,10 @@ async def chat_llm_stream(
     system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["ko"])
     msg_list = _build_messages(messages, context)
 
-    log.info(f"[llm] context 길이: {len(context)}")
-    log.info(f"[llm] context 내용:\n{context[:500]}")  # 앞 500자만
-    log.info(f"[llm] 최종 메시지:\n{msg_list[-1]['content'][:500]}")
-
     payload = {
         "model": CHAT_MODEL,
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": f"/no_think\n{system}"},
             *msg_list,
         ],
         "stream": True,
