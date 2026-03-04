@@ -79,9 +79,12 @@ async def search_rag(
             r.metadata.get("quest_name")
             or r.metadata.get("boss_name")
             or r.metadata.get("item_name")
+            or r.metadata.get("hideout_name")
+            or r.metadata.get("story_name")
+            or r.metadata.get("map_name")
             or ""
         )
         if isinstance(name, dict):
             name = name.get(lang, "")
-        log.info(f"{r}")
+        log.info(f"  {r.source_table} | {name} | similarity={r.similarity}")
     return results
