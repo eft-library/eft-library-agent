@@ -88,7 +88,7 @@ async def chat_llm(
     payload = {
         "model": CHAT_MODEL,
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": f"/no_think\n{system}"},
             *msg_list,
         ],
         "stream": False,
@@ -123,7 +123,7 @@ async def chat_llm_stream(
     payload = {
         "model": CHAT_MODEL,
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": f"/no_think\n{system}"},
             *msg_list,
         ],
         "stream": True,
