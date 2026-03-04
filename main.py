@@ -74,8 +74,8 @@ async def rag_chat(request: Request) -> JSONResponse:
             session_id=body["session_id"],
             user_query=body["query"],
             lang=body.get("lang", "ko"),
-            rag_limit=body.get("rag_limit", 5),
-            history_limit=body.get("history_limit", 10),
+            rag_limit=body.get("rag_limit", 10),
+            history_limit=body.get("history_limit", 5),
             source_table=body.get("source_table"),
         )
         return JSONResponse(result)
@@ -95,8 +95,8 @@ async def rag_chat_stream(request: Request) -> StreamingResponse:
                 session_id=body["session_id"],
                 user_query=body["query"],
                 lang=body.get("lang", "ko"),
-                rag_limit=body.get("rag_limit", 5),
-                history_limit=body.get("history_limit", 10),
+                rag_limit=body.get("rag_limit", 10),
+                history_limit=body.get("history_limit", 5),
                 source_table=body.get("source_table"),
             ),
             media_type="text/event-stream",
