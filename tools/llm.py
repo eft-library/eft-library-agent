@@ -55,12 +55,11 @@ IMPORTANT: Respond in English only.
 
 
 def _build_messages(messages: list[ChatMessage], context: str) -> list[dict]:
-    """context를 마지막 user 메시지에 직접 주입"""
     msg_list = [{"role": m.role, "content": m.content} for m in messages]
     if context and msg_list and msg_list[-1]["role"] == "user":
         msg_list[-1][
             "content"
-        ] = f"[참고 문서]\n{context}\n\n질문: {msg_list[-1]['content']}"
+        ] = f"/no_think\n[참고 문서]\n{context}\n\n질문: {msg_list[-1]['content']}"
     return msg_list
 
 
@@ -75,7 +74,7 @@ async def chat_llm(
     payload = {
         "model": CHAT_MODEL,
         "messages": [
-            {"role": "system", "content": f"/no_think\n{system}"},
+            {"role": "system", "content": system},
             *msg_list,
         ],
         "stream": False,
@@ -110,7 +109,7 @@ async def chat_llm_stream(
     payload = {
         "model": CHAT_MODEL,
         "messages": [
-            {"role": "system", "content": f"/no_think\n{system}"},
+            {"role": "system", "content": system},
             *msg_list,
         ],
         "stream": True,
