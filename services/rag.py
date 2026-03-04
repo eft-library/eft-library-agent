@@ -18,11 +18,7 @@ async def build_context(docs: list[RagDocument], lang: str = "ko") -> str:
         return ""
 
     # item_i18n 문서의 source_id 수집
-    item_ids = [
-        doc.source_id
-        for doc in docs
-        if doc.source_table == "item_i18n"
-    ]
+    item_ids = [doc.source_id for doc in docs if doc.source_table == "item_i18n"]
 
     # 시세 조회 (있을 때만)
     price_map: dict[str, str] = {}
