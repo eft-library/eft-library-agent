@@ -74,7 +74,7 @@ async def rag_chat(request: Request) -> JSONResponse:
             session_id=body["session_id"],
             user_query=body["query"],
             lang=body.get("lang", "ko"),
-            rag_limit=body.get("rag_limit", 10),
+            rag_limit=body.get("rag_limit", 5),
             history_limit=body.get("history_limit", 5),
             source_table=body.get("source_table"),
         )
@@ -95,7 +95,7 @@ async def rag_chat_stream(request: Request) -> StreamingResponse:
                 session_id=body["session_id"],
                 user_query=body["query"],
                 lang=body.get("lang", "ko"),
-                rag_limit=body.get("rag_limit", 10),
+                rag_limit=body.get("rag_limit", 5),
                 history_limit=body.get("history_limit", 5),
                 source_table=body.get("source_table"),
             ),
@@ -184,13 +184,13 @@ async def save_message(
 @mcp.tool()
 async def get_history(
     session_id: str,
-    limit: int = 10,
+    limit: int = 5,
 ) -> list[dict]:
     """
     세션의 대화 히스토리를 조회합니다.
     Args:
         session_id: 채팅 세션 UUID
-        limit:      가져올 최근 메시지 수 (기본 10)
+        limit:      가져올 최근 메시지 수 (기본 5)
     """
     messages = await _get_history(session_id=session_id, limit=limit)
     return [m.model_dump() for m in messages]

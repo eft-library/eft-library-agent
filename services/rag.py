@@ -45,8 +45,8 @@ async def run_rag_pipeline(
     session_id: str,
     user_query: str,
     lang: str = "ko",
-    rag_limit: int = 10,
-    history_limit: int = 10,
+    rag_limit: int = 5,
+    history_limit: int = 5,
     source_table: str | None = None,
 ) -> dict:
     """
@@ -100,8 +100,8 @@ async def run_rag_pipeline_stream(
     session_id: str,
     user_query: str,
     lang: str = "ko",
-    rag_limit: int = 10,
-    history_limit: int = 10,
+    rag_limit: int = 5,
+    history_limit: int = 5,
     source_table: str | None = None,
 ):
     """

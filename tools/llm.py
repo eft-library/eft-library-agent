@@ -81,7 +81,7 @@ async def chat_llm(
         "stream": False,
         "options": {
             "temperature": 0.1,
-            "num_ctx": 8192,
+            "num_ctx": 32768,
         },
     }
 
@@ -120,7 +120,7 @@ async def chat_llm_stream(
         "stream": True,
         "options": {
             "temperature": 0.1,
-            "num_ctx": 8192,
+            "num_ctx": 32768,
         },
     }
 

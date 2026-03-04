@@ -38,4 +38,4 @@ class SaveMessageInput(BaseModel):
 
 class GetHistoryInput(BaseModel):
     session_id: str
-    limit: int = 10
+    limit: int = 5
