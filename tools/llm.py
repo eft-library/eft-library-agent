@@ -137,8 +137,6 @@ async def chat_llm_stream(
                 data = json.loads(line)
                 token = data.get("message", {}).get("content", "")
                 if token:
-                    if "<think>" in token:  # 추가
-                        log.warning("[llm_stream] thinking 모드 감지됨!")
                     yield token
                 if data.get("done"):
                     log.info(
