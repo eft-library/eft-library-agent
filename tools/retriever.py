@@ -83,5 +83,5 @@ async def search_rag(
         )
         if isinstance(name, dict):
             name = name.get(lang, "")
-        log.info(f"  {r.source_table} | {name} | similarity={r.similarity}")
+        log.info(f"{r}")
     return results
