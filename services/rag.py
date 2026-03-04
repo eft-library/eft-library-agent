@@ -94,9 +94,6 @@ async def run_rag_pipeline_stream(
     # 2. 사용자 메시지 저장
     await save_message(session_id, "user", user_query, lang)
 
-    # 검색 쿼리 정제
-    log.info(f"[rag_pipeline] 원본={user_query} → 검색쿼리={user_query}")
-
     # 3. RAG 검색
     docs = await search_rag(
         query=user_query,
