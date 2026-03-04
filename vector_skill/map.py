@@ -81,8 +81,8 @@ LANG_LABELS = {
         "single_use": "1회용",
         "requirements": "요구사항",
         "tip": "팁",
-        "yes": "예",
-        "no": "아니오",
+        "yes": "✅",
+        "no": "❌",
     },
     "en": {
         "map": "Map",
@@ -96,8 +96,8 @@ LANG_LABELS = {
         "single_use": "Single Use",
         "requirements": "Requirements",
         "tip": "Tip",
-        "yes": "Yes",
-        "no": "No",
+        "yes": "✅",
+        "no": "❌",
     },
     "ja": {
         "map": "マップ",
@@ -111,8 +111,8 @@ LANG_LABELS = {
         "single_use": "一回限り",
         "requirements": "必要条件",
         "tip": "ヒント",
-        "yes": "はい",
-        "no": "いいえ",
+        "yes": "✅",
+        "no": "❌",
     },
 }
 
@@ -161,9 +161,8 @@ def build_extraction_content(map_row: dict, extractions: list, lang: str) -> str
         lines = [f"{label['extraction']}: {ext_name}"]
         if faction:
             lines.append(f"{label['faction']}: {faction}")
-        lines.append(
-            f"{label['always_available']}: {always} | {label['single_use']}: {single}"
-        )
+        lines.append(f"{label['always_available']}: {always}")
+        lines.append(f"{label['single_use']}: {single}")
         if requirements:
             lines.append(f"{label['requirements']}: {requirements}")
         if tip:
@@ -195,9 +194,8 @@ def build_transit_content(map_row: dict, transits: list, lang: str) -> str:
         lines = [f"{label['transit']}: {tr_name}"]
         if faction:
             lines.append(f"{label['faction']}: {faction}")
-        lines.append(
-            f"{label['always_available']}: {always} | {label['single_use']}: {single}"
-        )
+        lines.append(f"{label['always_available']}: {always}")
+        lines.append(f"{label['single_use']}: {single}")
         if requirements:
             lines.append(f"{label['requirements']}: {requirements}")
         if tip:

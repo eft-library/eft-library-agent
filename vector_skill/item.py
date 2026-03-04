@@ -58,12 +58,6 @@ def parse_jsonb(value) -> list | dict | None:
     return None
 
 
-def yn(value: bool | None, lang: str) -> str:
-    yes = {"ko": "예", "en": "Yes", "ja": "はい"}
-    no = {"ko": "아니오", "en": "No", "ja": "いいえ"}
-    return yes[lang] if value else no[lang]
-
-
 def fmt(value, suffix="") -> str:
     if value is None:
         return ""

@@ -65,8 +65,8 @@ def clean_html(html_text: str) -> str:
 
 
 def yn(value: bool | None, lang: str) -> str:
-    yes = {"ko": "예", "en": "Yes", "ja": "はい"}
-    no = {"ko": "아니오", "en": "No", "ja": "いいえ"}
+    yes = {"ko": "✅", "en": "✅", "ja": "✅"}
+    no = {"ko": "❌", "en": "❌", "ja": "❌"}
     return yes[lang] if value else no[lang]
 
 
@@ -139,7 +139,8 @@ def build_content(quest: dict, npc_name: str, lang: str) -> str:
     ]
     if min_level:
         parts.append(f"{lb['min_level']}: {min_level}")
-    parts.append(f"{lb['kappa']}: {kappa} | {lb['lightkeeper']}: {lightkeeper}")
+    parts.append(f"{lb['kappa']}: {kappa}")
+    parts.append(f"{lb['lightkeeper']}: {lightkeeper}")
 
     # 선행 퀘스트
     if task_reqs:
