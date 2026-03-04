@@ -59,7 +59,7 @@ def _build_messages(messages: list[ChatMessage], context: str) -> list[dict]:
     if context and msg_list and msg_list[-1]["role"] == "user":
         msg_list[-1][
             "content"
-        ] = f"/no_think\n[참고 문서]\n{context}\n\n질문: {msg_list[-1]['content']}"
+        ] = f"[참고 문서]\n{context}\n\n질문: {msg_list[-1]['content']}"
     return msg_list
 
 
@@ -78,6 +78,7 @@ async def chat_llm(
             *msg_list,
         ],
         "stream": False,
+        "think": False,
         "options": {
             "temperature": 0.1,
             "num_ctx": 16384,
@@ -108,8 +109,6 @@ async def chat_llm_stream(
 
     # 디버그 로그
     log.info(f"[llm_stream] context 길이: {len(context)}")
-    log.info(f"[llm_stream] context 내용:\n{context[:1000]}")
-    log.info(f"[llm_stream] 최종 user 메시지:\n{msg_list[-1]['content'][:1000]}")
     payload = {
         "model": CHAT_MODEL,
         "messages": [
@@ -117,6 +116,7 @@ async def chat_llm_stream(
             *msg_list,
         ],
         "stream": True,
+        "think": False,
         "options": {
             "temperature": 0.1,
             "num_ctx": 16384,
@@ -137,6 +137,8 @@ async def chat_llm_stream(
                 data = json.loads(line)
                 token = data.get("message", {}).get("content", "")
                 if token:
+                    if "<think>" in token:  # 추가
+                        log.warning("[llm_stream] thinking 모드 감지됨!")
                     yield token
                 if data.get("done"):
                     log.info(
