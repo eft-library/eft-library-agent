@@ -78,6 +78,7 @@ async def chat_llm(
             *msg_list,
         ],
         "stream": False,
+        "think": False,
         "options": {
             "temperature": 0.1,
             "num_ctx": 16384,
@@ -115,6 +116,7 @@ async def chat_llm_stream(
             *msg_list,
         ],
         "stream": True,
+        "think": False,
         "options": {
             "temperature": 0.1,
             "num_ctx": 16384,
