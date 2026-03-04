@@ -74,8 +74,8 @@ async def rag_chat(request: Request) -> JSONResponse:
             session_id=body["session_id"],
             user_query=body["query"],
             lang=body.get("lang", "ko"),
-            rag_limit=body.get("rag_limit", 5),
-            history_limit=body.get("history_limit", 5),
+            rag_limit=body.get("rag_limit", 3),
+            history_limit=body.get("history_limit", 3),
             source_table=body.get("source_table"),
         )
         return JSONResponse(result)
@@ -95,8 +95,8 @@ async def rag_chat_stream(request: Request) -> StreamingResponse:
                 session_id=body["session_id"],
                 user_query=body["query"],
                 lang=body.get("lang", "ko"),
-                rag_limit=body.get("rag_limit", 5),
-                history_limit=body.get("history_limit", 5),
+                rag_limit=body.get("rag_limit", 3),
+                history_limit=body.get("history_limit", 3),
                 source_table=body.get("source_table"),
             ),
             media_type="text/event-stream",
@@ -117,7 +117,7 @@ async def rag_chat_stream(request: Request) -> StreamingResponse:
 async def search_rag(
     query: str,
     lang: str = "ko",
-    limit: int = 5,
+    limit: int = 3,
     source_table: str | None = None,
 ) -> list[dict]:
     """
@@ -126,7 +126,7 @@ async def search_rag(
     Args:
         query:        검색할 질문 텍스트
         lang:         언어 (ko / en / ja)
-        limit:        반환할 문서 수 (기본 5)
+        limit:        반환할 문서 수 (기본 3)
         source_table: 특정 테이블만 검색 (None이면 전체)
     """
     docs = await _search_rag(
@@ -184,13 +184,13 @@ async def save_message(
 @mcp.tool()
 async def get_history(
     session_id: str,
-    limit: int = 5,
+    limit: int = 3,
 ) -> list[dict]:
     """
     세션의 대화 히스토리를 조회합니다.
     Args:
         session_id: 채팅 세션 UUID
-        limit:      가져올 최근 메시지 수 (기본 5)
+        limit:      가져올 최근 메시지 수 (기본 3)
     """
     messages = await _get_history(session_id=session_id, limit=limit)
     return [m.model_dump() for m in messages]

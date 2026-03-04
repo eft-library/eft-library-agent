@@ -5,7 +5,7 @@ from typing import Any
 class SearchRagInput(BaseModel):
     query: str
     lang: str = "ko"
-    limit: int = 5
+    limit: int = 3
     source_table: str | None = None
 
 
@@ -38,4 +38,4 @@ class SaveMessageInput(BaseModel):
 
 class GetHistoryInput(BaseModel):
     session_id: str
-    limit: int = 5
+    limit: int = 3

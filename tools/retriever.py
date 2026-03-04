@@ -13,7 +13,7 @@ IVF_PROBES = int(os.getenv("IVF_PROBES"))
 async def search_rag(
     query: str,
     lang: str = "ko",
-    limit: int = 5,
+    limit: int = 3,
     source_table: str | None = None,
 ) -> list[RagDocument]:
     embedding = await get_embedding(query)

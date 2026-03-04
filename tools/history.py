@@ -37,7 +37,7 @@ async def save_message(
 
 async def get_history(
     session_id: str,
-    limit: int = 5,
+    limit: int = 3,
 ) -> list[ChatMessage]:
     pool = await get_pool()
     async with pool.acquire() as conn:
