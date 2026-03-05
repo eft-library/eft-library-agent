@@ -13,12 +13,19 @@ async def build_context(docs: list[RagDocument], lang: str = "ko") -> str:
     """
     검색된 문서들을 LLM context 문자열로 조합
     item_i18n 문서가 있으면 ITEM_PRICE_I18N에서 시세 정보도 추가 (hybrid)
+    ref_id 기준으로 item_id 수집 (source_id는 _spec/_craft 등 suffix가 붙을 수 있음)
     """
     if not docs:
         return ""
 
-    # item_i18n 문서의 source_id 수집
-    item_ids = [doc.source_id for doc in docs if doc.source_table == "item_i18n"]
+    # ref_id 기준으로 item_id 수집 (source_id 대신)
+    item_ids = list(
+        {
+            doc.metadata.get("item_id")
+            for doc in docs
+            if doc.source_table == "item_i18n" and doc.metadata.get("item_id")
+        }
+    )
 
     # 시세 조회 (있을 때만)
     price_map: dict[str, str] = {}
@@ -32,9 +39,10 @@ async def build_context(docs: list[RagDocument], lang: str = "ko") -> str:
         url_line = f"\n출처 URL: {url}" if url else ""
         doc_text = f"[문서 {i}] (출처: {doc.source_table}, 유사도: {doc.similarity}){url_line}\n{doc.content}"
 
-        # 아이템 문서에 시세 정보 추가
-        if doc.source_table == "item_i18n" and doc.source_id in price_map:
-            doc_text += f"\n\n{price_map[doc.source_id]}"
+        # 아이템 문서에 시세 정보 추가 (item_id로 매핑)
+        item_id = doc.metadata.get("item_id")
+        if doc.source_table == "item_i18n" and item_id and item_id in price_map:
+            doc_text += f"\n\n{price_map[item_id]}"
 
         parts.append(doc_text)
 
