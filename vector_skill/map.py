@@ -131,10 +131,15 @@ LANG_LABELS = {
 
 
 def build_identifier_content(map_row: dict, lang: str) -> str:
-    """이름만 → RDB 조회용 (chunk_type: identifier)"""
     label = LANG_LABELS[lang]
     map_name = get_lang_value(map_row["name"], lang)
-    return f"{label['map']}: {map_name}"
+    map_name_en = get_lang_value(map_row["name"], "en")
+    keywords = {
+        "ko": f"{map_name} 맵 지도 정보 {map_name_en}",
+        "en": f"{map_name} map info {map_name_en}",
+        "ja": f"{map_name} マップ 情報 {map_name_en}",
+    }
+    return f"{keywords[lang]}\n{label['map']}: {map_name}"
 
 
 def build_map_content(map_row: dict, sub_areas: list, lang: str) -> str:
