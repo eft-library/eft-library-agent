@@ -63,42 +63,6 @@ def _build_messages(messages: list[ChatMessage], context: str) -> list[dict]:
     return msg_list
 
 
-async def chat_llm(
-    messages: list[ChatMessage],
-    context: str = "",
-    lang: str = "ko",
-) -> str:
-    system = SYSTEM_PROMPTS.get(lang, SYSTEM_PROMPTS["ko"])
-    msg_list = _build_messages(messages, context)
-
-    payload = {
-        "model": CHAT_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            *msg_list,
-        ],
-        "stream": False,
-        "think": False,
-        "options": {
-            "temperature": 0.1,
-            "num_ctx": 16384,
-        },
-    }
-
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
-            timeout=120.0,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-
-    answer = result["message"]["content"]
-    log.info(f"[llm] model={CHAT_MODEL} tokens={result.get('eval_count', '?')}")
-    return answer
-
-
 async def chat_llm_stream(
     messages: list[ChatMessage],
     context: str = "",
@@ -119,7 +83,7 @@ async def chat_llm_stream(
         "think": False,
         "options": {
             "temperature": 0.1,
-            "num_ctx": 16384,
+            "num_ctx": 32768,
         },
     }
 

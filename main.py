@@ -10,12 +10,11 @@ load_dotenv()
 from fastmcp import FastMCP
 from schemas.models import ChatMessage
 from tools.retriever import search_rag as _search_rag
-from tools.llm import chat_llm as _chat_llm
 from tools.history import save_message as _save_message, get_history as _get_history
 from db.connection import get_pool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
-from services.rag import run_rag_pipeline, run_rag_pipeline_stream
+from services.rag import run_rag_pipeline_stream
 from contextlib import asynccontextmanager
 import logging.handlers
 
@@ -64,28 +63,6 @@ async def lifespan(server):
 mcp = FastMCP("eft-library-rag", lifespan=lifespan)
 
 
-# HTTP 엔드포인트 (FastAPI에서 호출용)
-@mcp.custom_route("/api/rag/chat", methods=["POST"])
-async def rag_chat(request: Request) -> JSONResponse:
-    log.warning("=== rag_chat 진입 ===")
-    try:
-        body = await request.json()
-        result = await run_rag_pipeline(
-            session_id=body["session_id"],
-            user_query=body["query"],
-            lang=body.get("lang", "ko"),
-            rag_limit=body.get("rag_limit", 3),
-            history_limit=body.get("history_limit", 3),
-            source_table=body.get("source_table"),
-        )
-        return JSONResponse(result)
-    except KeyError as e:
-        return JSONResponse({"detail": f"필수 파라미터 누락: {e}"}, status_code=422)
-    except Exception as e:
-        log.error(f"[rag_chat] error: {e}")
-        return JSONResponse({"detail": str(e)}, status_code=500)
-
-
 @mcp.custom_route("/api/rag/chat/stream", methods=["POST"])
 async def rag_chat_stream(request: Request) -> StreamingResponse:
     try:
@@ -95,8 +72,8 @@ async def rag_chat_stream(request: Request) -> StreamingResponse:
                 session_id=body["session_id"],
                 user_query=body["query"],
                 lang=body.get("lang", "ko"),
-                rag_limit=body.get("rag_limit", 3),
-                history_limit=body.get("history_limit", 3),
+                rag_limit=body.get("rag_limit", int(os.getenv("RAG_LIMIT"))),
+                history_limit=body.get("history_limit", int(os.getenv("RAG_LIMIT"))),
                 source_table=body.get("source_table"),
             ),
             media_type="text/event-stream",
@@ -117,7 +94,7 @@ async def rag_chat_stream(request: Request) -> StreamingResponse:
 async def search_rag(
     query: str,
     lang: str = "ko",
-    limit: int = 3,
+    limit: int = int(os.getenv("RAG_LIMIT")),
     source_table: str | None = None,
 ) -> list[dict]:
     """
@@ -133,23 +110,6 @@ async def search_rag(
         query=query, lang=lang, limit=limit, source_table=source_table
     )
     return [d.model_dump() for d in docs]
-
-
-# Tool 2: chat_llm
-@mcp.tool()
-async def chat_llm(
-    messages: list[dict],
-    context: str = "",
-) -> str:
-    """
-    Ollama qwen3:8b로 답변을 생성합니다.
-
-    Args:
-        messages: 대화 히스토리 [{"role": "user"/"assistant", "content": "..."}]
-        context:  RAG에서 검색된 문서 내용 (system prompt에 주입)
-    """
-    chat_messages = [ChatMessage(**m) for m in messages]
-    return await _chat_llm(messages=chat_messages, context=context)
 
 
 # Tool 3: save_message
@@ -184,7 +144,7 @@ async def save_message(
 @mcp.tool()
 async def get_history(
     session_id: str,
-    limit: int = 3,
+    limit: int = int(os.getenv("RAG_LIMIT")),
 ) -> list[dict]:
     """
     세션의 대화 히스토리를 조회합니다.

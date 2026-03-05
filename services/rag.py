@@ -1,10 +1,11 @@
 import json
 import logging
 from tools.retriever import search_rag
-from tools.llm import chat_llm, chat_llm_stream
+from tools.llm import chat_llm_stream
 from tools.history import save_message, get_history
 from tools.price import get_item_prices
 from schemas.models import ChatMessage, RagDocument
+import os
 
 log = logging.getLogger(__name__)
 
@@ -49,67 +50,12 @@ async def build_context(docs: list[RagDocument], lang: str = "ko") -> str:
     return "\n\n".join(parts)
 
 
-async def run_rag_pipeline(
-    session_id: str,
-    user_query: str,
-    lang: str = "ko",
-    rag_limit: int = 3,
-    history_limit: int = 3,
-    source_table: str | None = None,
-) -> dict:
-    """
-    RAG 전체 파이프라인
-    1. 히스토리 조회
-    2. RAG 검색
-    3. LLM 호출
-    4. 메시지 저장 (user + assistant)
-    """
-
-    # 1. 히스토리 조회
-    history = await get_history(session_id, limit=history_limit)
-
-    # 2. 사용자 메시지 저장
-    await save_message(session_id, "user", user_query, lang)
-
-    # 3. RAG 검색
-    docs = await search_rag(
-        query=user_query,
-        lang=lang,
-        limit=rag_limit,
-        source_table=source_table,
-    )
-
-    # 4. context 조합 (hybrid: 아이템이면 시세 추가)
-    context = await build_context(docs, lang)
-
-    # 5. LLM 호출 (히스토리 + 새 질문)
-    messages = [*history, ChatMessage(role="user", content=user_query)]
-    answer = await chat_llm(messages=messages, context=context, lang=lang)
-
-    # 6. 어시스턴트 메시지 저장
-    source_docs = [
-        {
-            "source_table": d.source_table,
-            "source_id": d.source_id,
-            "similarity": d.similarity,
-        }
-        for d in docs
-    ]
-    await save_message(session_id, "assistant", answer, lang, source_docs)
-
-    log.info(f"[rag_pipeline] session={session_id} docs={len(docs)}")
-    return {
-        "answer": answer,
-        "docs": [d.model_dump() for d in docs],
-    }
-
-
 async def run_rag_pipeline_stream(
     session_id: str,
     user_query: str,
     lang: str = "ko",
-    rag_limit: int = 3,
-    history_limit: int = 3,
+    rag_limit: int = int(os.getenv("RAG_LIMIT")),
+    history_limit: int = int(os.getenv("RAG_LIMIT")),
     source_table: str | None = None,
 ):
     """

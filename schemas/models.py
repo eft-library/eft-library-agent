@@ -1,11 +1,12 @@
 from pydantic import BaseModel
 from typing import Any
+import os
 
 
 class SearchRagInput(BaseModel):
     query: str
     lang: str = "ko"
-    limit: int = 3
+    limit: int = int(os.getenv("RAG_LIMIT"))
     source_table: str | None = None
 
 
@@ -38,4 +39,4 @@ class SaveMessageInput(BaseModel):
 
 class GetHistoryInput(BaseModel):
     session_id: str
-    limit: int = 3
+    limit: int = int(os.getenv("RAG_LIMIT"))

@@ -2,6 +2,7 @@ import json
 import logging
 from db.connection import get_pool
 from schemas.models import ChatMessage
+import os
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ async def save_message(
 
 async def get_history(
     session_id: str,
-    limit: int = 3,
+    limit: int = int(os.getenv("RAG_LIMIT")),
 ) -> list[ChatMessage]:
     pool = await get_pool()
     async with pool.acquire() as conn:

@@ -3,6 +3,7 @@ import logging
 from db.connection import get_pool
 from tools.embedder import get_embedding
 from schemas.models import RagDocument
+import os
 
 log = logging.getLogger(__name__)
 
@@ -10,7 +11,7 @@ log = logging.getLogger(__name__)
 async def search_rag(
     query: str,
     lang: str = "ko",
-    limit: int = 3,
+    limit: int = int(os.getenv("RAG_LIMIT")),
     source_table: str | None = None,
 ) -> list[RagDocument]:
     """
