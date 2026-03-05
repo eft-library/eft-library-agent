@@ -4,6 +4,11 @@ quest_i18n + npc_i18n 배치 임베딩 스크립트
 - objectives, finish_rewards, guide HTML 파싱
 - bge-m3로 임베딩 생성
 - rag_documents 테이블에 upsert
+
+청크 분리:
+  - quest_id       : 퀘스트명 + 상인명 (chunk_type: identifier) → RDB 조회용
+  - quest_id_main  : 기본정보 + 목표 + 보상 (chunk_type: content)
+  - quest_id_guide : 가이드 (chunk_type: content)
 """
 
 import asyncio
@@ -21,7 +26,7 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL")
-BATCH_SIZE = 10
+BATCH_SIZE = 50
 LANGS = ["ko", "en", "ja"]
 
 logging.basicConfig(
@@ -65,9 +70,7 @@ def clean_html(html_text: str) -> str:
 
 
 def yn(value: bool | None, lang: str) -> str:
-    yes = {"ko": "✅", "en": "✅", "ja": "✅"}
-    no = {"ko": "❌", "en": "❌", "ja": "❌"}
-    return yes[lang] if value else no[lang]
+    return "✅" if value else "❌"
 
 
 # 라벨
@@ -116,8 +119,15 @@ LABELS = {
 NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
 
 
-# content 조합
-def build_content(quest: dict, npc_name: str, lang: str) -> str:
+# content 조합 - 퀘스트명 + 상인명 (identifier)
+def build_identifier_content(quest: dict, npc_name: str, lang: str) -> str:
+    lb = LABELS[lang]
+    quest_name = get_lang_value(quest["name"], lang)
+    return f"{lb['quest']}: {quest_name}\n{lb['trader']}: {npc_name}"
+
+
+# content 조합 - 기본정보 + 목표 + 보상
+def build_main_content(quest: dict, npc_name: str, lang: str) -> str:
     lb = LABELS[lang]
     nk = NAME_KEY[lang]
 
@@ -130,8 +140,6 @@ def build_content(quest: dict, npc_name: str, lang: str) -> str:
     task_next = parse_jsonb(quest.get("task_next")) or []
     objectives = parse_jsonb(quest.get("objectives")) or []
     rewards_raw = parse_jsonb(quest.get("finish_rewards")) or {}
-    guide_html = get_lang_value(quest.get("guide"), lang)
-    guide = clean_html(guide_html)
 
     parts = [
         f"{lb['quest']}: {quest_name}",
@@ -149,6 +157,7 @@ def build_content(quest: dict, npc_name: str, lang: str) -> str:
             for t in task_reqs
         ]
         parts.append(f"\n[{lb['prev_quest']}]\n" + "\n".join(lines))
+
     # 후행 퀘스트
     if task_next:
         lines = [
@@ -202,9 +211,24 @@ def build_content(quest: dict, npc_name: str, lang: str) -> str:
     if reward_lines:
         parts.append(f"\n[{lb['rewards']}]\n" + "\n".join(reward_lines))
 
-    # 가이드
-    if guide:
-        parts.append(f"\n[{lb['guide']}]\n{guide}")
+    return "\n".join(parts).strip()
+
+
+# content 조합 - 가이드
+def build_guide_content(quest: dict, npc_name: str, lang: str) -> str:
+    lb = LABELS[lang]
+
+    quest_name = get_lang_value(quest["name"], lang)
+    guide = clean_html(get_lang_value(quest.get("guide"), lang))
+
+    if not guide:
+        return ""
+
+    parts = [
+        f"{lb['quest']}: {quest_name}",
+        f"{lb['trader']}: {npc_name}",
+        f"\n[{lb['guide']}]\n{guide}",
+    ]
 
     return "\n".join(parts).strip()
 
@@ -227,25 +251,38 @@ async def upsert_rag_document(
     lang: str,
     content: str,
     embedding: list[float],
+    chunk_type: str,
+    ref_type: str,
+    ref_id: str,
     metadata: dict,
 ):
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
     await conn.execute(
         """
-        INSERT INTO rag_documents (source_table, source_id, lang, content, embedding, metadata)
-        VALUES ($1, $2, $3, $4, $5::vector, $6)
-        ON CONFLICT (source_table, source_id, lang)
+        INSERT INTO rag_documents (
+            source_table, source_id, lang,
+            content, embedding,
+            chunk_type, ref_type, ref_id,
+            metadata
+        )
+        VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9)
+        ON CONFLICT (source_table, source_id, lang, chunk_type)
         DO UPDATE SET
             content    = EXCLUDED.content,
             embedding  = EXCLUDED.embedding,
+            ref_type   = EXCLUDED.ref_type,
+            ref_id     = EXCLUDED.ref_id,
             metadata   = EXCLUDED.metadata,
             updated_at = NOW()
-    """,
+        """,
         "quest_i18n",
         source_id,
         lang,
         content,
         embedding_str,
+        chunk_type,
+        ref_type,
+        ref_id,
         json.dumps(metadata, ensure_ascii=False),
     )
 
@@ -259,57 +296,79 @@ async def process_batch(
         npc_id = quest.get("npc_id") or ""
         npc_names = npc_map.get(npc_id, {"ko": "", "en": "", "ja": ""})
 
-        for lang in LANGS:
-            npc_name = npc_names.get(lang, "")
-            content = build_content(quest, npc_name, lang)
+        base_metadata = {
+            "quest_id": quest_id,
+            "quest_name": {
+                "ko": get_lang_value(quest["name"], "ko"),
+                "en": get_lang_value(quest["name"], "en"),
+                "ja": get_lang_value(quest["name"], "ja"),
+            },
+            "npc_id": npc_id,
+            "npc_name": npc_names,
+            "kappa_required": quest.get("kappa_required") or False,
+            "lightkeeper_required": quest.get("lightkeeper_required") or False,
+            "min_player_level": quest.get("min_player_level"),
+            "url": f"https://eftlibrary.com/quest/detail/{quest.get('url_mapping') or quest_id}",
+        }
 
-            if not content.strip():
-                log.warning(f"  ⚠ 빈 content 스킵: {quest_id} [{lang}]")
+        docs = [
+            {
+                "source_id": quest_id,
+                "chunk_type": "identifier",
+                "build_fn": lambda lang, q=quest, n=npc_names: build_identifier_content(
+                    q, n.get(lang, ""), lang
+                ),
+                "skip": False,
+            },
+            {
+                "source_id": f"{quest_id}_main",
+                "chunk_type": "content",
+                "build_fn": lambda lang, q=quest, n=npc_names: build_main_content(
+                    q, n.get(lang, ""), lang
+                ),
+                "skip": False,
+            },
+            {
+                "source_id": f"{quest_id}_guide",
+                "chunk_type": "content",
+                "build_fn": lambda lang, q=quest, n=npc_names: build_guide_content(
+                    q, n.get(lang, ""), lang
+                ),
+                "skip": not quest.get("guide"),
+            },
+        ]
+
+        for doc in docs:
+            if doc["skip"]:
                 continue
 
-            try:
-                embedding = await get_embedding(client, content)
+            for lang in LANGS:
+                content = doc["build_fn"](lang)
 
-                metadata = {
-                    "content_type": "joined",
-                    "source_tables": ["quest_i18n", "npc_i18n"],
-                    "quest_id": quest_id,
-                    "quest_name": {
-                        "ko": get_lang_value(quest["name"], "ko"),
-                        "en": get_lang_value(quest["name"], "en"),
-                        "ja": get_lang_value(quest["name"], "ja"),
-                    },
-                    "npc_id": npc_id,
-                    "npc_name": npc_names,
-                    "kappa_required": quest.get("kappa_required") or False,
-                    "lightkeeper_required": quest.get("lightkeeper_required") or False,
-                    "min_player_level": quest.get("min_player_level"),
-                    "url": f"https://eftlibrary.com/quest/detail/{quest.get('url_mapping') or quest_id}",
-                }
+                if not content.strip():
+                    log.warning(f"  ⚠ 빈 content 스킵: {doc['source_id']} [{lang}]")
+                    continue
 
-                # ── 확인용 출력 ──────────────────────────────────────
-                # print(f"\n{'='*60}")
-                # print(f"[{quest_id}] [{lang}]")
-                # print(f"{'─'*60}")
-                # print(f"[content]\n{content}")
-                # print(f"{'─'*60}")
-                # print(
-                #     f"[metadata]\n{json.dumps(metadata, ensure_ascii=False, indent=2)}"
-                # )
-                # print(f"{'─'*60}")
-                # print(f"[embedding] 차원: {len(embedding)} | 앞 5개: {embedding[:5]}")
-                # print(f"{'='*60}")
-                # ────────────────────────────────────────────────────
+                try:
+                    embedding = await get_embedding(client, content)
 
-                await upsert_rag_document(
-                    conn, quest_id, lang, content, embedding, metadata
-                )
-                log.info(f"  ✓ {quest_id} [{lang}] 완료")
+                    await upsert_rag_document(
+                        conn,
+                        doc["source_id"],
+                        lang,
+                        content,
+                        embedding,
+                        doc["chunk_type"],  # identifier or content
+                        "quest",
+                        quest_id,  # ref_id는 항상 quest_id로 통일
+                        base_metadata,
+                    )
+                    log.info(f"  ✓ {doc['source_id']} [{lang}] 완료")
 
-            except httpx.HTTPError as e:
-                log.error(f"  ✗ 임베딩 실패: {quest_id} [{lang}] - {e}")
-            except asyncpg.PostgresError as e:
-                log.error(f"  ✗ DB 저장 실패: {quest_id} [{lang}] - {e}")
+                except httpx.HTTPError as e:
+                    log.error(f"  ✗ 임베딩 실패: {doc['source_id']} [{lang}] - {e}")
+                except asyncpg.PostgresError as e:
+                    log.error(f"  ✗ DB 저장 실패: {doc['source_id']} [{lang}] - {e}")
 
 
 # 메인
@@ -321,7 +380,6 @@ async def main():
     client = httpx.AsyncClient()
 
     try:
-        # npc_map 미리 로드 (order IS NOT NULL인 것만)
         npc_rows = await conn.fetch("""
             SELECT id, name FROM npc_i18n
             WHERE "order" IS NOT NULL
@@ -337,7 +395,7 @@ async def main():
         log.info(f"NPC 로드 완료: {len(npc_map)}개")
 
         total = await conn.fetchval("SELECT COUNT(*) FROM quest_i18n")
-        log.info(f"총 {total}개 퀘스트 처리 예정 (언어 3개 → {total * 3}개 row 생성)")
+        log.info(f"총 {total}개 퀘스트 처리 예정")
 
         offset = 0
         processed = 0
@@ -353,7 +411,7 @@ async def main():
                 FROM quest_i18n
                 ORDER BY "order" ASC NULLS LAST, id ASC
                 LIMIT $1 OFFSET $2
-            """,
+                """,
                 BATCH_SIZE,
                 offset,
             )
@@ -369,9 +427,7 @@ async def main():
             processed += len(rows_dict)
             offset += BATCH_SIZE
 
-        log.info(
-            f"=== 완료: {processed}개 퀘스트, {processed * 3}개 row 생성/업데이트 ==="
-        )
+        log.info(f"=== 완료: {processed}개 퀘스트 처리 ===")
 
     finally:
         await client.aclose()

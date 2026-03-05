@@ -6,6 +6,12 @@ hideout 배치 임베딩 스크립트 (level 단위)
 - hideout_bonus_i18n, hideout_crafts_i18n 조인
 - bge-m3로 임베딩 생성
 - rag_documents 테이블에 upsert
+
+청크 분리:
+  - level_id_identifier : 식별용 (은신처명 + 레벨) → chunk_type: identifier
+  - level_id            : 기본정보 + 건설 조건 (아이템/스킬/시설/상인)
+  - level_id_bonuses    : 레벨업 보너스
+  - level_id_crafts     : 제작 레시피
 """
 
 import asyncio
@@ -56,46 +62,21 @@ def parse_jsonb(value) -> list | dict | None:
     return None
 
 
-def fmt_duration(seconds: int | None) -> str:
-    """초 → 시간/분 변환"""
+def fmt_duration(seconds: int | None, lang: str) -> str:
     if not seconds:
-        return "0분"
-    if seconds < 3600:
-        return f"{seconds // 60}분"
+        return {"ko": "0분", "en": "0min", "ja": "0分"}[lang]
     h = seconds // 3600
     m = (seconds % 3600) // 60
-    return f"{h}시간 {m}분" if m else f"{h}시간"
+    if lang == "ko":
+        return f"{h}시간 {m}분" if h and m else (f"{h}시간" if h else f"{m}분")
+    elif lang == "en":
+        return f"{h}h {m}min" if h and m else (f"{h}h" if h else f"{m}min")
+    else:
+        return f"{h}時間 {m}分" if h and m else (f"{h}時間" if h else f"{m}分")
 
-
-def fmt_duration_en(seconds: int | None) -> str:
-    if not seconds:
-        return "0min"
-    if seconds < 3600:
-        return f"{seconds // 60}min"
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    return f"{h}h {m}min" if m else f"{h}h"
-
-
-def fmt_duration_ja(seconds: int | None) -> str:
-    if not seconds:
-        return "0分"
-    if seconds < 3600:
-        return f"{seconds // 60}分"
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    return f"{h}時間 {m}分" if m else f"{h}時間"
-
-
-DURATION_FMT = {
-    "ko": fmt_duration,
-    "en": fmt_duration_en,
-    "ja": fmt_duration_ja,
-}
 
 NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
 
-# 라벨
 LABELS = {
     "ko": {
         "hideout": "은신처",
@@ -151,30 +132,32 @@ LABELS = {
 }
 
 
-# content 조합
-def build_content(
+# content 조합 - 식별용 (chunk_type: identifier)
+def build_identifier_content(master_name: dict, level_num: int, lang: str) -> str:
+    lb = LABELS[lang]
+    hideout_name = get_lang_value(master_name, lang)
+    return f"{lb['hideout']}: {hideout_name}\n{lb['level']}: {level_num}"
+
+
+# content 조합 - 기본정보 + 건설 조건
+def build_main_content(
     master_name: dict,
     level_row: dict,
     items: list,
     skills: list,
     stations: list,
     traders: list,
-    bonuses: list,
-    crafts: list,
     lang: str,
 ) -> str:
     lb = LABELS[lang]
-    nk = NAME_KEY[lang]
-    dur_fmt = DURATION_FMT[lang]
-
+    construction_sec = level_row.get("construction_time") or 0
     hideout_name = get_lang_value(master_name, lang)
     level_num = level_row.get("level", "")
-    construction_sec = level_row.get("construction_time") or 0
 
     parts = [
         f"{lb['hideout']}: {hideout_name}",
         f"{lb['level']}: {level_num}",
-        f"{lb['build_time']}: {dur_fmt(construction_sec)}",
+        f"{lb['build_time']}: {fmt_duration(construction_sec, lang)}",
     ]
 
     # 건설 필요 아이템
@@ -189,72 +172,106 @@ def build_content(
 
     # 필요 스킬
     if skills:
-        lines = []
-        for s in skills:
-            name = get_lang_value(s.get("name"), lang)
-            level = s.get("level", "")
-            lines.append(f"- {name} {lb['lv']}{level}")
+        lines = [
+            f"- {get_lang_value(s.get('name'), lang)} {lb['lv']}{s.get('level', '')}"
+            for s in skills
+        ]
         parts.append(f"\n[{lb['skills']}]\n" + "\n".join(lines))
 
     # 필요 시설
     if stations:
-        lines = []
-        for st in stations:
-            name = get_lang_value(st.get("name"), lang)
-            level = st.get("level", "")
-            lines.append(f"- {name} {lb['lv']}{level}")
+        lines = [
+            f"- {get_lang_value(st.get('name'), lang)} {lb['lv']}{st.get('level', '')}"
+            for st in stations
+        ]
         parts.append(f"\n[{lb['stations']}]\n" + "\n".join(lines))
 
     # 필요 상인
     if traders:
-        lines = []
-        for t in traders:
-            name = get_lang_value(t.get("name"), lang)
-            value = t.get("value", "")
-            lines.append(f"- {name} {lb['lv']}{value}")
+        lines = [
+            f"- {get_lang_value(t.get('name'), lang)} {lb['lv']}{t.get('value', '')}"
+            for t in traders
+        ]
         parts.append(f"\n[{lb['traders']}]\n" + "\n".join(lines))
 
-    # 레벨업 보너스
-    if bonuses:
-        lines = []
-        for b in bonuses:
-            name = get_lang_value(b.get("name"), lang)
-            skill_name = get_lang_value(b.get("skill_name"), lang)
-            value = b.get("value")
-            val_str = f"{float(value):+.4g}" if value is not None else ""
-            line = f"- {name}: {val_str}"
-            if skill_name:
-                line += f" ({skill_name})"
-            lines.append(line)
-        parts.append(f"\n[{lb['bonuses']}]\n" + "\n".join(lines))
+    return "\n".join(parts).strip()
 
-    # 제작 레시피
-    if crafts:
-        craft_parts = []
-        for c in crafts:
-            craft_name = get_lang_value(c.get("name"), lang)
-            quantity = c.get("quantity") or 1
-            duration = c.get("duration") or 0
-            req_items = parse_jsonb(c.get("req_item")) or []
 
-            lines = [
-                f"{lb['reward']}: {craft_name.strip()} x{quantity}",
-                f"{lb['duration']}: {dur_fmt(int(duration))}",
+# content 조합 - 레벨업 보너스
+def build_bonuses_content(
+    master_name: dict,
+    level_row: dict,
+    bonuses: list,
+    lang: str,
+) -> str:
+    if not bonuses:
+        return ""
+
+    lb = LABELS[lang]
+    hideout_name = get_lang_value(master_name, lang)
+    level_num = level_row.get("level", "")
+
+    lines = []
+    for b in bonuses:
+        name = get_lang_value(b.get("name"), lang)
+        skill_name = get_lang_value(b.get("skill_name"), lang)
+        value = b.get("value")
+        val_str = f"{float(value):+.4g}" if value is not None else ""
+        line = f"- {name}: {val_str}"
+        if skill_name:
+            line += f" ({skill_name})"
+        lines.append(line)
+
+    parts = [
+        f"{lb['hideout']}: {hideout_name}",
+        f"{lb['level']}: {level_num}",
+        f"\n[{lb['bonuses']}]\n" + "\n".join(lines),
+    ]
+
+    return "\n".join(parts).strip()
+
+
+# content 조합 - 제작 레시피
+def build_crafts_content(
+    master_name: dict,
+    level_row: dict,
+    crafts: list,
+    lang: str,
+) -> str:
+    if not crafts:
+        return ""
+
+    lb = LABELS[lang]
+    nk = NAME_KEY[lang]
+    hideout_name = get_lang_value(master_name, lang)
+    level_num = level_row.get("level", "")
+
+    craft_parts = []
+    for c in crafts:
+        craft_name = get_lang_value(c.get("name"), lang)
+        quantity = c.get("quantity") or 1
+        duration = c.get("duration") or 0
+        req_items = parse_jsonb(c.get("req_item")) or []
+
+        lines = [
+            f"{lb['reward']}: {craft_name.strip()} x{quantity}",
+            f"{lb['duration']}: {fmt_duration(int(duration), lang)}",
+        ]
+        if req_items:
+            req_lines = [
+                f"  · {(r.get('item') or {}).get(nk) or (r.get('item') or {}).get('name_en', '')} x{r.get('quantity', '')}"
+                for r in req_items
+                if r.get("item")
             ]
-            if req_items:
-                req_lines = []
-                for r in req_items:
-                    item = r.get("item") or {}
-                    item_name = item.get(nk) or item.get("name_en", "")
-                    qty = r.get("quantity", "")
-                    req_lines.append(f"  · {item_name.strip()} x{qty}")
-                lines.append(f"{lb['requires']}:\n" + "\n".join(req_lines))
+            lines.append(f"{lb['requires']}:\n" + "\n".join(req_lines))
 
-            craft_parts.append("\n".join(lines))
+        craft_parts.append("\n".join(lines))
 
-        parts.append(f"\n[{lb['crafts']}]\n" + "\n\n".join(craft_parts))
-    else:
-        parts.append(f"\n[{lb['crafts']}]\n{lb['none']}")
+    parts = [
+        f"{lb['hideout']}: {hideout_name}",
+        f"{lb['level']}: {level_num}",
+        f"\n[{lb['crafts']}]\n" + "\n\n".join(craft_parts),
+    ]
 
     return "\n".join(parts).strip()
 
@@ -277,25 +294,38 @@ async def upsert_rag_document(
     lang: str,
     content: str,
     embedding: list[float],
+    chunk_type: str,
+    ref_type: str,
+    ref_id: str,
     metadata: dict,
 ):
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
     await conn.execute(
         """
-        INSERT INTO rag_documents (source_table, source_id, lang, content, embedding, metadata)
-        VALUES ($1, $2, $3, $4, $5::vector, $6)
-        ON CONFLICT (source_table, source_id, lang)
+        INSERT INTO rag_documents (
+            source_table, source_id, lang,
+            content, embedding,
+            chunk_type, ref_type, ref_id,
+            metadata
+        )
+        VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9)
+        ON CONFLICT (source_table, source_id, lang, chunk_type)
         DO UPDATE SET
             content    = EXCLUDED.content,
             embedding  = EXCLUDED.embedding,
+            ref_type   = EXCLUDED.ref_type,
+            ref_id     = EXCLUDED.ref_id,
             metadata   = EXCLUDED.metadata,
             updated_at = NOW()
-    """,
+        """,
         "hideout_level_i18n",
         source_id,
         lang,
         content,
         embedding_str,
+        chunk_type,
+        ref_type,
+        ref_id,
         json.dumps(metadata, ensure_ascii=False),
     )
 
@@ -318,72 +348,86 @@ async def process_level(
     level_num = level_row.get("level", "")
     master_name = master_row["name"]
 
-    for lang in LANGS:
-        content = build_content(
-            master_name,
-            level_row,
-            items,
-            skills,
-            stations,
-            traders,
-            bonuses,
-            crafts,
-            lang,
-        )
+    base_metadata = {
+        "master_id": master_id,
+        "level_id": level_id,
+        "level": level_num,
+        "hideout_name": {
+            "ko": get_lang_value(master_name, "ko"),
+            "en": get_lang_value(master_name, "en"),
+            "ja": get_lang_value(master_name, "ja"),
+        },
+        "craft_count": len(crafts),
+        "url": "https://eftlibrary.com/hideout",
+    }
 
-        if not content.strip():
-            log.warning(f"  ⚠ 빈 content 스킵: {level_id} [{lang}]")
+    docs = [
+        {
+            "source_id": f"{level_id}_identifier",
+            "chunk_type": "identifier",
+            "build_fn": lambda lang, mn=master_name, ln=level_num: build_identifier_content(
+                mn, ln, lang
+            ),
+            "skip": False,
+        },
+        {
+            "source_id": level_id,
+            "chunk_type": "content",
+            "build_fn": lambda lang, mn=master_name, lr=level_row, it=items, sk=skills, st=stations, tr=traders: build_main_content(
+                mn, lr, it, sk, st, tr, lang
+            ),
+            "skip": False,
+        },
+        {
+            "source_id": f"{level_id}_bonuses",
+            "chunk_type": "content",
+            "build_fn": lambda lang, mn=master_name, lr=level_row, bo=bonuses: build_bonuses_content(
+                mn, lr, bo, lang
+            ),
+            "skip": not bonuses,
+        },
+        {
+            "source_id": f"{level_id}_crafts",
+            "chunk_type": "content",
+            "build_fn": lambda lang, mn=master_name, lr=level_row, cr=crafts: build_crafts_content(
+                mn, lr, cr, lang
+            ),
+            "skip": not crafts,
+        },
+    ]
+
+    for doc in docs:
+        if doc["skip"]:
             continue
 
-        try:
-            embedding = await get_embedding(client, content)
+        for lang in LANGS:
+            content = doc["build_fn"](lang)
 
-            metadata = {
-                "content_type": "joined",
-                "source_tables": [
-                    "hideout_master_i18n",
-                    "hideout_level_i18n",
-                    "hideout_item_require_i18n",
-                    "hideout_skill_require_i18n",
-                    "hideout_station_require_i18n",
-                    "hideout_trader_require_i18n",
-                    "hideout_bonus_i18n",
-                    "hideout_crafts_i18n",
-                ],
-                "master_id": master_id,
-                "level_id": level_id,
-                "level": level_num,
-                "hideout_name": {
-                    "ko": get_lang_value(master_name, "ko"),
-                    "en": get_lang_value(master_name, "en"),
-                    "ja": get_lang_value(master_name, "ja"),
-                },
-                "craft_count": len(crafts),
-                "url": f"https://eftlibrary.com/hideout",
-            }
+            if not content.strip():
+                log.warning(f"  ⚠ 빈 content 스킵: {doc['source_id']} [{lang}]")
+                continue
 
-            # ── 확인용 출력 ──────────────────────────────────────
-            # print(f"\n{'='*60}")
-            # print(f"[{level_id}] [{lang}]")
-            # print(f"{'─'*60}")
-            # print(f"[content]\n{content}")
-            # print(f"{'─'*60}")
-            # print(f"[metadata]\n{json.dumps(metadata, ensure_ascii=False, indent=2)}")
-            # print(f"{'─'*60}")
-            # print(f"[embedding] 차원: {len(embedding)} | 앞 5개: {embedding[:5]}")
-            # print(f"{'='*60}")
-            # ────────────────────────────────────────────────────
+            try:
+                embedding = await get_embedding(client, content)
 
-            async with pool.acquire() as conn:
-                await upsert_rag_document(
-                    conn, level_id, lang, content, embedding, metadata
-                )
-            log.info(f"  ✓ {level_id} [{lang}] 완료")
+                async with pool.acquire() as conn:
+                    await upsert_rag_document(
+                        conn,
+                        doc["source_id"],
+                        lang,
+                        content,
+                        embedding,
+                        doc["chunk_type"],
+                        "hideout",
+                        level_id,  # ref_id는 항상 level_id로 통일
+                        base_metadata,
+                    )
+                log.info(f"  ✓ {doc['source_id']} [{lang}] 완료")
 
-        except httpx.HTTPError as e:
-            log.error(f"  ✗ 임베딩 실패: {level_id} [{lang}] - {e}")
-        except asyncpg.PostgresError as e:
-            log.error(f"  ✗ DB 저장 실패: {level_id} [{lang}] - {e}")
+            except httpx.HTTPError as e:
+                log.error(f"  ✗ 임베딩 실패: {doc['source_id']} [{lang}] - {e}")
+            except asyncpg.PostgresError as e:
+                log.error(f"  ✗ DB 저장 실패: {doc['source_id']} [{lang}] - {e}")
 
 
 # 메인
@@ -395,7 +439,6 @@ async def main():
     client = httpx.AsyncClient()
 
     try:
-        # master 전체 조회
         async with pool.acquire() as conn:
             master_rows = await conn.fetch("""
                 SELECT id, name, level_ids
@@ -415,7 +458,6 @@ async def main():
             if not level_ids:
                 continue
 
-            # 해당 master의 level 전체 조회
             async with pool.acquire() as conn:
                 level_rows = await conn.fetch(
                     """
@@ -423,7 +465,7 @@ async def main():
                     FROM hideout_level_i18n
                     WHERE id = ANY($1)
                     ORDER BY level ASC
-                """,
+                    """,
                     level_ids,
                 )
 
@@ -433,7 +475,6 @@ async def main():
                 level_dict = dict(level_row)
                 level_id = level_row["id"]
 
-                # 하위 데이터 순차 조회 (단일 커넥션으로 안전하게)
                 async with pool.acquire() as conn:
                     items = await conn.fetch(
                         "SELECT name, quantity, count, found_in_raid FROM hideout_item_require_i18n WHERE level_id = $1 ORDER BY id ASC",
@@ -474,9 +515,7 @@ async def main():
                 )
                 processed += 1
 
-        log.info(
-            f"=== 완료: {processed}개 레벨, {processed * 3}개 row 생성/업데이트 ==="
-        )
+        log.info(f"=== 완료: {processed}개 레벨 처리 ===")
 
     finally:
         await client.aclose()

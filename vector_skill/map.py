@@ -1,9 +1,14 @@
 """
 map_group_i18n + extraction_i18n + transit_i18n 배치 임베딩 스크립트
 - 맵 기본 정보 / 탈출구 / 트랜짓 3개 문서로 분리
-  source_id: CUSTOMS / CUSTOMS_extract / CUSTOMS_transit
 - bge-m3로 임베딩 생성
 - rag_documents 테이블에 upsert
+
+청크 분리:
+  - {map_id}           : 이름만 (chunk_type: identifier) → RDB 조회용
+  - {map_id}_main      : 기본 정보 + 구역 목록 (chunk_type: content)
+  - {map_id}_extract   : 탈출구 목록 (chunk_type: content)
+  - {map_id}_transit   : 트랜짓 목록 (chunk_type: content)
 """
 
 import asyncio
@@ -26,6 +31,9 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
 log = logging.getLogger(__name__)
+
+
+# ── 유틸 ──────────────────────────────────────────────────────────────────────
 
 SKIP_HEADERS = {"아이콘", "icon", "アイコン"}
 
@@ -67,6 +75,8 @@ def get_lang_value(jsonb_field, lang: str) -> str:
             return ""
     return jsonb_field.get(lang, "") or ""
 
+
+# ── 라벨 ──────────────────────────────────────────────────────────────────────
 
 LANG_LABELS = {
     "ko": {
@@ -117,7 +127,18 @@ LANG_LABELS = {
 }
 
 
+# ── content 빌더 ───────────────────────────────────────────────────────────────
+
+
+def build_identifier_content(map_row: dict, lang: str) -> str:
+    """이름만 → RDB 조회용 (chunk_type: identifier)"""
+    label = LANG_LABELS[lang]
+    map_name = get_lang_value(map_row["name"], lang)
+    return f"{label['map']}: {map_name}"
+
+
 def build_map_content(map_row: dict, sub_areas: list, lang: str) -> str:
+    """기본 정보 + 구역 목록 (chunk_type: content)"""
     label = LANG_LABELS[lang]
     map_name = get_lang_value(map_row["name"], lang)
     map_name_ko = get_lang_value(map_row["name"], "ko")
@@ -140,6 +161,7 @@ def build_map_content(map_row: dict, sub_areas: list, lang: str) -> str:
 
 
 def build_extraction_content(map_row: dict, extractions: list, lang: str) -> str:
+    """탈출구 목록 (chunk_type: content)"""
     label = LANG_LABELS[lang]
     map_name = get_lang_value(map_row["name"], lang)
     map_name_ko = get_lang_value(map_row["name"], "ko")
@@ -173,6 +195,7 @@ def build_extraction_content(map_row: dict, extractions: list, lang: str) -> str
 
 
 def build_transit_content(map_row: dict, transits: list, lang: str) -> str:
+    """트랜짓 목록 (chunk_type: content)"""
     label = LANG_LABELS[lang]
     map_name = get_lang_value(map_row["name"], lang)
     map_name_ko = get_lang_value(map_row["name"], "ko")
@@ -205,6 +228,9 @@ def build_transit_content(map_row: dict, transits: list, lang: str) -> str:
     return "\n".join(parts).strip()
 
 
+# ── 임베딩 + upsert ────────────────────────────────────────────────────────────
+
+
 async def get_embedding(client: httpx.AsyncClient, text: str) -> list[float]:
     response = await client.post(
         f"{OLLAMA_BASE_URL}/api/embed",
@@ -215,26 +241,49 @@ async def get_embedding(client: httpx.AsyncClient, text: str) -> list[float]:
     return response.json()["embeddings"][0]
 
 
-async def upsert_rag_document(conn, source_id, lang, content, embedding, metadata):
+async def upsert_rag_document(
+    conn: asyncpg.Connection,
+    source_id: str,
+    lang: str,
+    content: str,
+    embedding: list[float],
+    chunk_type: str,
+    ref_type: str,
+    ref_id: str,
+    metadata: dict,
+):
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
     await conn.execute(
         """
-        INSERT INTO rag_documents (source_table, source_id, lang, content, embedding, metadata)
-        VALUES ($1, $2, $3, $4, $5::vector, $6)
-        ON CONFLICT (source_table, source_id, lang)
+        INSERT INTO rag_documents (
+            source_table, source_id, lang,
+            content, embedding,
+            chunk_type, ref_type, ref_id,
+            metadata
+        )
+        VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9)
+        ON CONFLICT (source_table, source_id, lang, chunk_type)
         DO UPDATE SET
             content    = EXCLUDED.content,
             embedding  = EXCLUDED.embedding,
+            ref_type   = EXCLUDED.ref_type,
+            ref_id     = EXCLUDED.ref_id,
             metadata   = EXCLUDED.metadata,
             updated_at = NOW()
-    """,
+        """,
         "map_group_i18n",
         source_id,
         lang,
         content,
         embedding_str,
+        chunk_type,
+        ref_type,
+        ref_id,
         json.dumps(metadata, ensure_ascii=False),
     )
+
+
+# ── 맵별 처리 ──────────────────────────────────────────────────────────────────
 
 
 async def process_map(conn, client, map_row, sub_areas, extractions, transits):
@@ -252,16 +301,27 @@ async def process_map(conn, client, map_row, sub_areas, extractions, transits):
     docs = [
         {
             "source_id": map_id,
-            "content_type": "map_info",
-            "source_tables": ["map_group_i18n"],
+            "chunk_type": "identifier",  # 이름만 → RDB 조회용
+            "ref_type": "map",
+            "ref_id": map_id,
+            "build_fn": lambda lang: build_identifier_content(map_row, lang),
+            "extra": {},
+            "skip": False,
+        },
+        {
+            "source_id": f"{map_id}_main",
+            "chunk_type": "content",  # 기본 정보 + 구역 목록
+            "ref_type": "map",
+            "ref_id": map_id,
             "build_fn": lambda lang: build_map_content(map_row, sub_areas, lang),
             "extra": {"sub_area_count": len(sub_areas)},
             "skip": False,
         },
         {
             "source_id": f"{map_id}_extract",
-            "content_type": "extraction",
-            "source_tables": ["map_group_i18n", "extraction_i18n"],
+            "chunk_type": "content",  # 탈출구 목록
+            "ref_type": "map",
+            "ref_id": map_id,
             "build_fn": lambda lang: build_extraction_content(
                 map_row, extractions, lang
             ),
@@ -270,8 +330,9 @@ async def process_map(conn, client, map_row, sub_areas, extractions, transits):
         },
         {
             "source_id": f"{map_id}_transit",
-            "content_type": "transit",
-            "source_tables": ["map_group_i18n", "transit_i18n"],
+            "chunk_type": "content",  # 트랜짓 목록
+            "ref_type": "map",
+            "ref_id": map_id,
             "build_fn": lambda lang: build_transit_content(map_row, transits, lang),
             "extra": {"transit_count": len(transits)},
             "skip": not transits,
@@ -280,21 +341,26 @@ async def process_map(conn, client, map_row, sub_areas, extractions, transits):
 
     for doc in docs:
         if doc["skip"]:
+            log.info(f"  - {doc['source_id']} 스킵")
             continue
         for lang in LANGS:
             content = doc["build_fn"](lang)
             if not content.strip():
+                log.warning(f"  ⚠ 빈 content 스킵: {doc['source_id']} [{lang}]")
                 continue
             try:
                 embedding = await get_embedding(client, content)
-                metadata = {
-                    **base_metadata,
-                    "content_type": doc["content_type"],
-                    "source_tables": doc["source_tables"],
-                    **doc["extra"],
-                }
+                metadata = {**base_metadata, **doc["extra"]}
                 await upsert_rag_document(
-                    conn, doc["source_id"], lang, content, embedding, metadata
+                    conn,
+                    doc["source_id"],
+                    lang,
+                    content,
+                    embedding,
+                    doc["chunk_type"],
+                    doc["ref_type"],
+                    doc["ref_id"],
+                    metadata,
                 )
                 log.info(f"  ✓ {doc['source_id']} [{lang}] 완료")
             except httpx.HTTPError as e:
@@ -303,8 +369,11 @@ async def process_map(conn, client, map_row, sub_areas, extractions, transits):
                 log.error(f"  ✗ DB 저장 실패: {doc['source_id']} [{lang}] - {e}")
 
 
+# ── 메인 ──────────────────────────────────────────────────────────────────────
+
+
 async def main():
-    log.info("=== map 배치 임베딩 시작 (3문서 분리) ===")
+    log.info("=== map 배치 임베딩 시작 ===")
     conn = await asyncpg.connect(DATABASE_URL)
     client = httpx.AsyncClient()
 
@@ -313,7 +382,7 @@ async def main():
             "SELECT id, name FROM map_group_i18n WHERE depth = 1 ORDER BY id ASC"
         )
         total = len(map_rows)
-        log.info(f"총 {total}개 지도 → 최대 {total * 3}개 문서 × 3개 언어")
+        log.info(f"총 {total}개 지도 → 최대 {total * 4}개 문서 × 3개 언어")
 
         for map_row in map_rows:
             map_id = map_row["id"]

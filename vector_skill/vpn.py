@@ -76,12 +76,15 @@ async def upsert_document(pool, lang, content, embedding):
         await conn.execute(
             """
             INSERT INTO rag_documents
-            (source_table, source_id, lang, content, embedding, metadata)
-            VALUES ($1, $2, $3, $4, $5::vector, $6)
-            ON CONFLICT (source_table, source_id, lang)
+            (source_table, source_id, lang, content, embedding,
+             chunk_type, ref_type, ref_id, metadata)
+            VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9)
+            ON CONFLICT (source_table, source_id, lang, chunk_type)
             DO UPDATE SET
                 content = EXCLUDED.content,
                 embedding = EXCLUDED.embedding,
+                ref_type = EXCLUDED.ref_type,
+                ref_id = EXCLUDED.ref_id,
                 metadata = EXCLUDED.metadata,
                 updated_at = NOW()
             """,
@@ -90,9 +93,11 @@ async def upsert_document(pool, lang, content, embedding):
             lang,
             content.strip(),
             embedding_str,
+            "content",  # chunk_type
+            "custom",  # ref_type
+            SOURCE_ID,  # ref_id
             json.dumps(
                 {
-                    "content_type": "custom",
                     "url": "https://aff.gearupglobal.com/product/download/HSMniDfsEY6c",
                     "keywords": [
                         "vpn",
@@ -104,8 +109,6 @@ async def upsert_document(pool, lang, content, embedding):
                 }
             ),
         )
-
-    print(f"[OK] {lang}")
 
 
 # 전체 처리 함수 (병렬 임베딩)

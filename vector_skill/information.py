@@ -7,6 +7,10 @@ DYNAMIC_INFO_I18N + INFORMATION_I18N 배치 임베딩 스크립트
 - INFORMATION_I18N에서 해당 id 조회 후 조인
 - bge-m3로 임베딩 생성
 - rag_documents 테이블에 upsert
+
+청크 분리:
+  - {item_id}          : 이름만 (chunk_type: identifier) → RDB 조회용
+  - {item_id}_content  : 본문 전체 (chunk_type: content)
 """
 
 import asyncio
@@ -31,21 +35,18 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# 유틸
+# ── 유틸────
+
+
 def clean_html(html_text: str) -> str:
     if not html_text:
         return ""
     soup = BeautifulSoup(html_text, "html.parser")
     for img in soup.find_all("img"):
         img.decompose()
-
-    # 인라인 태그 먼저 unwrap (텍스트 유지, 태그만 제거)
     for tag in soup.find_all(["a", "b", "strong", "em", "i", "span"]):
         tag.unwrap()
-
-    # unwrap 후 다시 파싱 (변경사항 반영)
     soup = BeautifulSoup(str(soup), "html.parser")
-
     return soup.get_text(separator="\n", strip=True)
 
 
@@ -73,8 +74,8 @@ def parse_jsonb(value) -> list | dict | None:
     return None
 
 
-# ID 추출
-# { type_key: (link_prefix, db_type) }
+# ── 타입 설정
+
 TYPE_CONFIG = {
     "event": {
         "link_prefix": "/event/detail/",
@@ -90,10 +91,7 @@ TYPE_CONFIG = {
 
 
 def extract_ids_by_type(json_value: dict) -> dict[str, set[str]]:
-    """
-    json_value에서 event/patch link 파싱
-    반환: { "event": {"event24", ...}, "patch": {"patch22", ...} }
-    """
+    """json_value에서 event/patch link 파싱 → { "event": {"event24", ...}, ... }"""
     result = {t: set() for t in TYPE_CONFIG}
     for type_key, cfg in TYPE_CONFIG.items():
         items = json_value.get(type_key, [])
@@ -106,7 +104,8 @@ def extract_ids_by_type(json_value: dict) -> dict[str, set[str]]:
     return result
 
 
-# content 빌더
+# ── 라벨 / 키워드 ──────────────────────────────────────────────────────────────
+
 LANG_LABELS = {
     "ko": {
         "event": "이벤트",
@@ -144,18 +143,28 @@ SEARCH_KEYWORDS = {
 }
 
 
+# ── content 빌더
+
+
+def build_identifier_content(info_row: dict, type_key: str, lang: str) -> str:
+    """이름만 → RDB 조회용 (chunk_type: identifier)"""
+    type_label = LANG_LABELS[lang][type_key]
+    name = get_lang_value(info_row["name"], lang)
+    return f"{type_label}: {name}"
+
+
 def build_content(info_row: dict, type_key: str, lang: str) -> str:
+    """검색 키워드 + 이름 + 날짜 + 본문 (chunk_type: content)"""
     label = LANG_LABELS[lang]
     type_label = label[type_key]
     name = get_lang_value(info_row["name"], lang)
     description = clean_html(get_lang_value(info_row["description"], lang))
     update_time = info_row["update_time"]
     updated_str = update_time.strftime("%Y-%m-%d") if update_time else ""
-
     keywords = SEARCH_KEYWORDS[lang][type_key]
 
     parts = [
-        f"{keywords} {name}",  # 검색 키워드
+        f"{keywords} {name}",
         f"{type_label}: {name}",
         f"{label['updated']}: {updated_str}",
     ]
@@ -165,7 +174,9 @@ def build_content(info_row: dict, type_key: str, lang: str) -> str:
     return "\n".join(parts).strip()
 
 
-# 임베딩 + upsert
+# ── 임베딩 + upsert ────────────────────────────────────────────────────────────
+
+
 async def get_embedding(client: httpx.AsyncClient, text: str) -> list[float]:
     response = await client.post(
         f"{OLLAMA_BASE_URL}/api/embed",
@@ -176,29 +187,51 @@ async def get_embedding(client: httpx.AsyncClient, text: str) -> list[float]:
     return response.json()["embeddings"][0]
 
 
-async def upsert_rag_document(conn, source_id, lang, content, embedding, metadata):
+async def upsert_rag_document(
+    conn,
+    source_id: str,
+    lang: str,
+    content: str,
+    embedding: list[float],
+    chunk_type: str,
+    ref_type: str,
+    ref_id: str,
+    metadata: dict,
+):
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
     await conn.execute(
         """
-        INSERT INTO rag_documents (source_table, source_id, lang, content, embedding, metadata)
-        VALUES ($1, $2, $3, $4, $5::vector, $6)
-        ON CONFLICT (source_table, source_id, lang)
+        INSERT INTO rag_documents (
+            source_table, source_id, lang,
+            content, embedding,
+            chunk_type, ref_type, ref_id,
+            metadata
+        )
+        VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9)
+        ON CONFLICT (source_table, source_id, lang, chunk_type)
         DO UPDATE SET
             content    = EXCLUDED.content,
             embedding  = EXCLUDED.embedding,
+            ref_type   = EXCLUDED.ref_type,
+            ref_id     = EXCLUDED.ref_id,
             metadata   = EXCLUDED.metadata,
             updated_at = NOW()
-    """,
+        """,
         "information_i18n",
         source_id,
         lang,
         content,
         embedding_str,
+        chunk_type,
+        ref_type,
+        ref_id,
         json.dumps(metadata, ensure_ascii=False),
     )
 
 
-# 타입별 처리
+# ── 타입별 처리 ─
+
+
 async def process_type(
     conn: asyncpg.Connection,
     client: httpx.AsyncClient,
@@ -218,7 +251,7 @@ async def process_type(
         FROM information_i18n
         WHERE id = ANY($1) AND type = $2
         ORDER BY update_time DESC
-    """,
+        """,
         list(ids),
         cfg["db_type"],
     )
@@ -229,37 +262,71 @@ async def process_type(
         info = dict(row)
         item_id = info["id"]
 
-        for lang in LANGS:
-            content = build_content(info, type_key, lang)
-            if not content.strip():
-                log.warning(f"  ⚠ 빈 content 스킵: {item_id} [{lang}]")
+        base_metadata = {
+            "content_type": type_key,
+            "source_tables": ["dynamic_info_i18n", "information_i18n"],
+            "item_id": item_id,
+            "item_name": {
+                "ko": get_lang_value(info["name"], "ko"),
+                "en": get_lang_value(info["name"], "en"),
+                "ja": get_lang_value(info["name"], "ja"),
+            },
+            "url": f"{cfg['url_prefix']}{item_id}",
+        }
+
+        docs = [
+            {
+                "source_id": item_id,
+                "chunk_type": "identifier",  # 이름만 → RDB 조회용
+                "build_fn": lambda lang, r=info, t=type_key: build_identifier_content(
+                    r, t, lang
+                ),
+                "skip": False,
+            },
+            {
+                "source_id": f"{item_id}_content",
+                "chunk_type": "content",  # 본문 전체
+                "build_fn": lambda lang, r=info, t=type_key: build_content(r, t, lang),
+                "skip": not info.get("description"),
+            },
+        ]
+
+        for doc in docs:
+            if doc["skip"]:
+                log.info(f"  - {doc['source_id']} 스킵 (description 없음)")
                 continue
 
-            try:
-                embedding = await get_embedding(client, content)
-                metadata = {
-                    "content_type": type_key,
-                    "source_tables": ["dynamic_info_i18n", "information_i18n"],
-                    "item_id": item_id,
-                    "item_name": {
-                        "ko": get_lang_value(info["name"], "ko"),
-                        "en": get_lang_value(info["name"], "en"),
-                        "ja": get_lang_value(info["name"], "ja"),
-                    },
-                    "url": f"{cfg['url_prefix']}{item_id}",
-                }
-                await upsert_rag_document(
-                    conn, item_id, lang, content, embedding, metadata
-                )
-                log.info(f"  ✓ {item_id} [{lang}] 완료")
+            for lang in LANGS:
+                content = doc["build_fn"](lang)
 
-            except httpx.HTTPError as e:
-                log.error(f"  ✗ 임베딩 실패: {item_id} [{lang}] - {e}")
-            except asyncpg.PostgresError as e:
-                log.error(f"  ✗ DB 저장 실패: {item_id} [{lang}] - {e}")
+                if not content.strip():
+                    log.warning(f"  ⚠ 빈 content 스킵: {doc['source_id']} [{lang}]")
+                    continue
+
+                try:
+                    embedding = await get_embedding(client, content)
+                    await upsert_rag_document(
+                        conn,
+                        doc["source_id"],
+                        lang,
+                        content,
+                        embedding,
+                        doc["chunk_type"],
+                        type_key,  # ref_type ("event" or "patch")
+                        item_id,  # ref_id는 항상 item_id로 통일
+                        base_metadata,
+                    )
+                    log.info(f"  ✓ {doc['source_id']} [{lang}] 완료")
+
+                except httpx.HTTPError as e:
+                    log.error(f"  ✗ 임베딩 실패: {doc['source_id']} [{lang}] - {e}")
+                except asyncpg.PostgresError as e:
+                    log.error(f"  ✗ DB 저장 실패: {doc['source_id']} [{lang}] - {e}")
 
 
-# 메인
+# ── 메인────
+
+
 async def main():
     log.info("=== dynamic_info event/patch + information 배치 임베딩 시작 ===")
 

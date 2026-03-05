@@ -1,13 +1,10 @@
 import json
 import logging
-import os
 from db.connection import get_pool
 from tools.embedder import get_embedding
 from schemas.models import RagDocument
 
 log = logging.getLogger(__name__)
-
-IVF_PROBES = int(os.getenv("IVF_PROBES"))
 
 
 async def search_rag(
@@ -21,41 +18,38 @@ async def search_rag(
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute(f"SET LOCAL ivfflat.probes = {IVF_PROBES}")
-
-            if source_table:
-                rows = await conn.fetch(
-                    """
-                    SELECT
-                        source_table, source_id, lang, content, metadata,
-                        1 - (embedding <=> $1::vector) AS similarity
-                    FROM rag_documents
-                    WHERE lang = $2
-                      AND source_table = $3
-                    ORDER BY embedding <=> $1::vector
-                    LIMIT $4
+        if source_table:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    source_table, source_id, lang, content, metadata,
+                    1 - (embedding <=> $1::vector) AS similarity
+                FROM rag_documents
+                WHERE lang = $2
+                  AND source_table = $3
+                ORDER BY embedding <=> $1::vector
+                LIMIT $4
                 """,
-                    embedding_str,
-                    lang,
-                    source_table,
-                    limit,
-                )
-            else:
-                rows = await conn.fetch(
-                    """
-                    SELECT
-                        source_table, source_id, lang, content, metadata,
-                        1 - (embedding <=> $1::vector) AS similarity
-                    FROM rag_documents
-                    WHERE lang = $2
-                    ORDER BY embedding <=> $1::vector
-                    LIMIT $3
+                embedding_str,
+                lang,
+                source_table,
+                limit,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    source_table, source_id, lang, content, metadata,
+                    1 - (embedding <=> $1::vector) AS similarity
+                FROM rag_documents
+                WHERE lang = $2
+                ORDER BY embedding <=> $1::vector
+                LIMIT $3
                 """,
-                    embedding_str,
-                    lang,
-                    limit,
-                )
+                embedding_str,
+                lang,
+                limit,
+            )
 
     results = []
     for row in rows:

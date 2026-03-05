@@ -4,6 +4,12 @@ boss_i18n 배치 임베딩 스크립트
 - HTML 파싱 후 텍스트 조합
 - bge-m3로 임베딩 생성
 - rag_documents 테이블에 upsert
+
+청크 분리:
+  - boss_id            : 이름만 (chunk_type: identifier) → RDB 조회용
+  - boss_id_main       : 기본정보 + 스폰 위치 + 부위별 체력 (chunk_type: content)
+  - boss_id_drops      : 드랍 아이템 (chunk_type: content)
+  - boss_id_guide      : 위치 가이드 (chunk_type: content)
 """
 
 import asyncio
@@ -31,7 +37,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# HTML 파싱
+# ── 유틸
 SKIP_HEADERS = {"아이콘", "icon", "アイコン"}
 
 
@@ -96,7 +102,7 @@ def parse_jsonb(value) -> list | dict | None:
     return None
 
 
-# content 조합
+# ── 라벨
 LANG_LABELS = {
     "ko": {
         "boss": "보스",
@@ -135,19 +141,27 @@ SPAWN_NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
 ITEM_NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
 
 
-def build_content(row: dict, lang: str) -> str:
-    """언어별 임베딩용 텍스트 조합"""
+# ── content 빌더 ───────────────────────────────────────────────────────────────
+
+
+def build_identifier_content(row: dict, lang: str) -> str:
+    """이름만 → RDB 조회용 (chunk_type: identifier)"""
+    label = LANG_LABELS[lang]
+    name = get_lang_value(row["name"], lang)
+    return f"{label['boss']}: {name}"
+
+
+def build_main_content(row: dict, lang: str) -> str:
+    """기본정보 + 스폰 위치 + 부위별 체력 (chunk_type: content)"""
     label = LANG_LABELS[lang]
 
     name = get_lang_value(row["name"], lang)
     faction = row.get("faction") or ""
     health_total = row.get("health_total") or ""
     order = row.get("order") or ""
-    location_guide = clean_html(get_lang_value(row.get("location_guide"), lang))
 
     health_detail = parse_jsonb(row.get("health_detail")) or []
     spawn_chance = parse_jsonb(row.get("spawn_chance")) or []
-    item_info = parse_jsonb(row.get("item_info")) or []
 
     parts = [f"{label['boss']}: {name}"]
     if order:
@@ -157,7 +171,6 @@ def build_content(row: dict, lang: str) -> str:
     if health_total:
         parts.append(f"{label['health_total']}: {health_total}")
 
-    # 스폰 위치 및 확률
     if spawn_chance:
         lines = []
         for s in spawn_chance:
@@ -167,7 +180,6 @@ def build_content(row: dict, lang: str) -> str:
             lines.append(f"- {name_val}: {chance_str}")
         parts.append(f"\n[{label['spawn']}]\n" + "\n".join(lines))
 
-    # 부위별 체력
     if health_detail:
         lines = []
         for h in health_detail:
@@ -176,24 +188,53 @@ def build_content(row: dict, lang: str) -> str:
             lines.append(f"- {part}: {max_hp}")
         parts.append(f"\n[{label['health_detail']}]\n" + "\n".join(lines))
 
-    # 드랍 아이템 (이름만, 가격 제외)
-    if item_info:
-        lines = []
-        for entry in item_info:
-            item = entry.get("item", {})
-            item_name = item.get(ITEM_NAME_KEY[lang]) or item.get("name_en", "")
-            quantity = entry.get("quantity") or entry.get("count", "")
-            lines.append(f"- {item_name.strip()} x{quantity}")
-        parts.append(f"\n[{label['items']}]\n" + "\n".join(lines))
+    return "\n".join(parts).strip()
 
-    # 위치 가이드
-    if location_guide:
-        parts.append(f"\n[{label['guide']}]\n{location_guide}")
+
+def build_drops_content(row: dict, lang: str) -> str:
+    """드랍 아이템 (chunk_type: content)"""
+    label = LANG_LABELS[lang]
+
+    name = get_lang_value(row["name"], lang)
+    item_info = parse_jsonb(row.get("item_info")) or []
+
+    if not item_info:
+        return ""
+
+    lines = []
+    for entry in item_info:
+        item = entry.get("item", {})
+        item_name = item.get(ITEM_NAME_KEY[lang]) or item.get("name_en", "")
+        quantity = entry.get("quantity") or entry.get("count", "")
+        lines.append(f"- {item_name.strip()} x{quantity}")
+
+    parts = [
+        f"{label['boss']}: {name}",
+        f"\n[{label['items']}]\n" + "\n".join(lines),
+    ]
 
     return "\n".join(parts).strip()
 
 
-# 임베딩 생성 (Ollama bge-m3)
+def build_guide_content(row: dict, lang: str) -> str:
+    """위치 가이드 (chunk_type: content)"""
+    label = LANG_LABELS[lang]
+
+    name = get_lang_value(row["name"], lang)
+    location_guide = clean_html(get_lang_value(row.get("location_guide"), lang))
+
+    if not location_guide:
+        return ""
+
+    parts = [
+        f"{label['boss']}: {name}",
+        f"\n[{label['guide']}]\n{location_guide}",
+    ]
+
+    return "\n".join(parts).strip()
+
+
+# ── 임베딩 + upsert
 async def get_embedding(client: httpx.AsyncClient, text: str) -> list[float]:
     response = await client.post(
         f"{OLLAMA_BASE_URL}/api/embed",
@@ -204,93 +245,132 @@ async def get_embedding(client: httpx.AsyncClient, text: str) -> list[float]:
     return response.json()["embeddings"][0]
 
 
-# DB upsert
 async def upsert_rag_document(
     conn: asyncpg.Connection,
     source_id: str,
     lang: str,
     content: str,
     embedding: list[float],
+    chunk_type: str,
+    ref_type: str,
+    ref_id: str,
     metadata: dict,
 ):
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
     await conn.execute(
         """
-        INSERT INTO rag_documents (source_table, source_id, lang, content, embedding, metadata)
-        VALUES ($1, $2, $3, $4, $5::vector, $6)
-        ON CONFLICT (source_table, source_id, lang)
+        INSERT INTO rag_documents (
+            source_table, source_id, lang,
+            content, embedding,
+            chunk_type, ref_type, ref_id,
+            metadata
+        )
+        VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9)
+        ON CONFLICT (source_table, source_id, lang, chunk_type)
         DO UPDATE SET
             content    = EXCLUDED.content,
             embedding  = EXCLUDED.embedding,
+            ref_type   = EXCLUDED.ref_type,
+            ref_id     = EXCLUDED.ref_id,
             metadata   = EXCLUDED.metadata,
             updated_at = NOW()
-    """,
+        """,
         "boss_i18n",
         source_id,
         lang,
         content,
         embedding_str,
+        chunk_type,
+        ref_type,
+        ref_id,
         json.dumps(metadata, ensure_ascii=False),
     )
 
 
-# 메인 배치 처리
+# ── 배치 처리
 async def process_batch(
     conn: asyncpg.Connection, client: httpx.AsyncClient, rows: list[dict]
 ):
     for row in rows:
         boss_id = row["id"]
+        item_info = parse_jsonb(row.get("item_info")) or []
+        location_guide = get_lang_value(
+            row.get("location_guide"), "en"
+        )  # 존재 여부 확인용
 
-        for lang in LANGS:
-            content = build_content(row, lang)
+        base_metadata = {
+            "boss_id": boss_id,
+            "boss_name": {
+                "ko": get_lang_value(row["name"], "ko"),
+                "en": get_lang_value(row["name"], "en"),
+                "ja": get_lang_value(row["name"], "ja"),
+            },
+            "url_mapping": row.get("url_mapping") or "",
+            "spawn_map": list(row.get("spawn_map") or []),
+            "url": f"https://eftlibrary.com/boss/{row.get('url_mapping')}",
+        }
 
-            if not content.strip():
-                log.warning(f"  ⚠ 빈 content 스킵: {boss_id} [{lang}]")
+        docs = [
+            {
+                "source_id": boss_id,
+                "chunk_type": "identifier",  # 이름만 → RDB 조회용
+                "build_fn": lambda lang, r=row: build_identifier_content(r, lang),
+                "skip": False,
+            },
+            {
+                "source_id": f"{boss_id}_main",
+                "chunk_type": "content",  # 기본정보 + 스폰 + 체력
+                "build_fn": lambda lang, r=row: build_main_content(r, lang),
+                "skip": False,
+            },
+            {
+                "source_id": f"{boss_id}_drops",
+                "chunk_type": "content",  # 드랍 아이템
+                "build_fn": lambda lang, r=row: build_drops_content(r, lang),
+                "skip": not item_info,
+            },
+            {
+                "source_id": f"{boss_id}_guide",
+                "chunk_type": "content",  # 위치 가이드
+                "build_fn": lambda lang, r=row: build_guide_content(r, lang),
+                "skip": not location_guide,
+            },
+        ]
+
+        for doc in docs:
+            if doc["skip"]:
+                log.info(f"  - {doc['source_id']} 스킵")
                 continue
 
-            try:
-                embedding = await get_embedding(client, content)
+            for lang in LANGS:
+                content = doc["build_fn"](lang)
 
-                metadata = {
-                    "content_type": "single",
-                    "source_tables": ["boss_i18n"],
-                    "boss_id": boss_id,
-                    "boss_name": {
-                        "ko": get_lang_value(row["name"], "ko"),
-                        "en": get_lang_value(row["name"], "en"),
-                        "ja": get_lang_value(row["name"], "ja"),
-                    },
-                    "url_mapping": row.get("url_mapping") or "",
-                    "spawn_map": list(row.get("spawn_map") or []),
-                    "order": row.get("order"),
-                    "url": f"https://eftlibrary.com/boss/{row.get('url_mapping')}",
-                }
+                if not content.strip():
+                    log.warning(f"  ⚠ 빈 content 스킵: {doc['source_id']} [{lang}]")
+                    continue
 
-                # ── 확인용 출력 ──────────────────────────────────────
-                # print(f"\n{'='*60}")
-                # print(f"[{boss_id}] [{lang}]")
-                # print(f"{'─'*60}")
-                # print(f"[content]\n{content}")
-                # print(f"{'─'*60}")
-                # print(
-                #     f"[metadata]\n{json.dumps(metadata, ensure_ascii=False, indent=2)}"
-                # )
-                # print(f"{'─'*60}")
-                # print(f"[embedding] 차원: {len(embedding)} | 앞 5개: {embedding[:5]}")
-                # print(f"{'='*60}")
-                # ───────────
+                try:
+                    embedding = await get_embedding(client, content)
+                    await upsert_rag_document(
+                        conn,
+                        doc["source_id"],
+                        lang,
+                        content,
+                        embedding,
+                        doc["chunk_type"],
+                        "boss",
+                        boss_id,  # ref_id는 항상 boss_id로 통일
+                        base_metadata,
+                    )
+                    log.info(f"  ✓ {doc['source_id']} [{lang}] 완료")
 
-                await upsert_rag_document(
-                    conn, boss_id, lang, content, embedding, metadata
-                )
-                log.info(f"  ✓ {boss_id} [{lang}] 완료")
-
-            except httpx.HTTPError as e:
-                log.error(f"  ✗ 임베딩 실패: {boss_id} [{lang}] - {e}")
-            except asyncpg.PostgresError as e:
-                log.error(f"  ✗ DB 저장 실패: {boss_id} [{lang}] - {e}")
+                except httpx.HTTPError as e:
+                    log.error(f"  ✗ 임베딩 실패: {doc['source_id']} [{lang}] - {e}")
+                except asyncpg.PostgresError as e:
+                    log.error(f"  ✗ DB 저장 실패: {doc['source_id']} [{lang}] - {e}")
 
 
+# ── 메인
 async def main():
     log.info("=== boss_i18n 배치 임베딩 시작 ===")
     log.info(f"모델: {EMBED_MODEL} | 배치 크기: {BATCH_SIZE} | 언어: {LANGS}")
@@ -302,7 +382,7 @@ async def main():
         total = await conn.fetchval(
             "SELECT COUNT(*) FROM boss_i18n WHERE is_boss = true"
         )
-        log.info(f"총 {total}개 boss 처리 예정 (언어 3개 → {total * 3}개 row 생성)")
+        log.info(f"총 {total}개 boss 처리 예정")
 
         offset = 0
         processed = 0
@@ -317,7 +397,7 @@ async def main():
                 WHERE is_boss = true
                 ORDER BY "order" ASC NULLS LAST, id ASC
                 LIMIT $1 OFFSET $2
-            """,
+                """,
                 BATCH_SIZE,
                 offset,
             )
@@ -333,9 +413,7 @@ async def main():
             processed += len(rows_dict)
             offset += BATCH_SIZE
 
-        log.info(
-            f"=== 완료: {processed}개 boss, {processed * 3}개 row 생성/업데이트 ==="
-        )
+        log.info(f"=== 완료: {processed}개 boss 처리 ===")
 
     finally:
         await client.aclose()

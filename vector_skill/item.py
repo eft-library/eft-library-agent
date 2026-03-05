@@ -7,6 +7,12 @@ item_i18n + item_detail_i18n + hideout_crafts_i18n 배치 임베딩 스크립트
 - 이미 처리된 아이템 스킵 (재시작 안전)
 - bge-m3로 임베딩 생성
 - rag_documents 테이블에 upsert
+
+청크 분리:
+  - item_id        : 이름 + 카테고리 (chunk_type: identifier) → RDB 조회용
+  - item_id_spec   : 카테고리별 스펙 (chunk_type: content)
+  - item_id_detail : hideout 건설, 퀘스트, NPC 교환 등 (chunk_type: content)
+  - item_id_craft  : 제작 레시피 (chunk_type: content)
 """
 
 import asyncio
@@ -24,8 +30,9 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL")
 BATCH_SIZE = 50
-CONCURRENT_LIMIT = 5  # 동시 처리 수
-SKIP_EXISTING = False  # 기존 항목 스킵
+CONCURRENT_LIMIT = 5
+SKIP_EXISTING = False
+LANGS = ["ko", "en", "ja"]
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -114,7 +121,6 @@ def parse_medical(info: dict, lang: str) -> str:
     buff = info.get("buff") or []
     malus = info.get("malus") or []
     skill_key = f"skill_name_{lang}"
-
     buff_str = ", ".join(
         f"{b.get(skill_key, b.get('type', ''))} +{b.get('value')} ({b.get('duration')}초)"
         for b in buff
@@ -265,12 +271,11 @@ def parse_default(info: dict, lang: str) -> str:
     weight = info.get("weight")
     if not weight:
         return ""
-    label = {
+    return {
         "ko": f"무게: {weight}kg",
         "en": f"Weight: {weight}kg",
         "ja": f"重量: {weight}kg",
     }[lang]
-    return label
 
 
 INFO_PARSERS = {
@@ -295,7 +300,7 @@ INFO_PARSERS = {
 }
 
 
-# item_detail 파서
+# 라벨
 DETAIL_LABELS = {
     "ko": {
         "hideout": "은신처 건설 필요",
@@ -329,9 +334,6 @@ DETAIL_LABELS = {
     },
 }
 
-NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
-
-# 제작 레시피 레이블
 CRAFT_LABELS = {
     "ko": {
         "title": "이 아이템을 만드는 방법 (제작법)",
@@ -359,6 +361,11 @@ CRAFT_LABELS = {
     },
 }
 
+CATEGORY_LABEL = {"ko": "카테고리", "en": "Category", "ja": "カテゴリ"}
+SPEC_LABEL = {"ko": "스펙", "en": "Spec", "ja": "スペック"}
+ITEM_LABEL = {"ko": "아이템", "en": "Item", "ja": "アイテム"}
+NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
+
 
 def format_duration(seconds: int, lang: str) -> str:
     lb = CRAFT_LABELS[lang]
@@ -372,15 +379,45 @@ def format_duration(seconds: int, lang: str) -> str:
     return f"{hours}{lb['hour']} {remaining}{lb['min']}"
 
 
-def parse_detail(detail: dict | None, lang: str) -> str:
-    if not detail:
+# content 조합 - 이름 + 카테고리 (identifier)
+def build_identifier_content(item_row: dict, lang: str) -> str:
+    name = get_lang_value(item_row["name"], lang)
+    category = item_row.get("category") or ""
+    return f"{ITEM_LABEL[lang]}: {name}\n{CATEGORY_LABEL[lang]}: {category}"
+
+
+# content 조합 - 카테고리별 스펙
+def build_spec_content(item_row: dict, lang: str) -> str:
+    name = get_lang_value(item_row["name"], lang)
+    category = item_row.get("category") or ""
+    info = parse_jsonb(item_row.get("info")) or {}
+
+    parser = INFO_PARSERS.get(category, parse_default)
+    spec = parser(info, lang).strip()
+
+    if not spec:
         return ""
+
+    parts = [
+        f"{ITEM_LABEL[lang]}: {name}",
+        f"{CATEGORY_LABEL[lang]}: {category}",
+        f"\n[{SPEC_LABEL[lang]}]\n{spec}",
+    ]
+
+    return "\n".join(parts).strip()
+
+
+# content 조합 - 상세정보 (hideout, quest, npc 등)
+def build_detail_content(item_row: dict, detail_row: dict, lang: str) -> str:
     lb = DETAIL_LABELS[lang]
     nk = NAME_KEY[lang]
-    parts = []
+    name = get_lang_value(item_row["name"], lang)
+
+    parts = [f"{ITEM_LABEL[lang]}: {name}"]
+    detail_parts = []
 
     # 은신처 건설 필요
-    hideout = detail.get("hideout_items") or []
+    hideout = parse_jsonb(detail_row.get("hideout_items")) or []
     if hideout:
         lines = []
         for h in hideout:
@@ -388,21 +425,21 @@ def parse_detail(detail: dict | None, lang: str) -> str:
             level = h.get("level", "")
             count = h.get("count", "")
             lines.append(f"- {master} {lb['lv']}{level} x{count}")
-        parts.append(f"[{lb['hideout']}]\n" + "\n".join(lines))
+        detail_parts.append(f"[{lb['hideout']}]\n" + "\n".join(lines))
 
     # 제작 재료
-    crafts = detail.get("used_in_crafts") or []
+    crafts = parse_jsonb(detail_row.get("used_in_crafts")) or []
     if crafts:
         lines = []
         for c in crafts:
-            name = get_lang_value(c.get("name"), lang)
+            n = get_lang_value(c.get("name"), lang)
             master = get_lang_value(c.get("master_name"), lang)
             level = c.get("level", "")
-            lines.append(f"- {name} ({master} {lb['lv']}{level})")
-        parts.append(f"[{lb['crafts']}]\n" + "\n".join(lines))
+            lines.append(f"- {n} ({master} {lb['lv']}{level})")
+        detail_parts.append(f"[{lb['crafts']}]\n" + "\n".join(lines))
 
     # 상인 교환
-    npcs = detail.get("rewarded_by_npcs") or []
+    npcs = parse_jsonb(detail_row.get("rewarded_by_npcs")) or []
     if npcs:
         lines = []
         for n in npcs:
@@ -416,10 +453,10 @@ def parse_detail(detail: dict | None, lang: str) -> str:
                 if r.get("item")
             )
             lines.append(f"- {npc_name} {lb['lv']}{level} | 필요: {req_str}")
-        parts.append(f"[{lb['npc']}]\n" + "\n".join(lines))
+        detail_parts.append(f"[{lb['npc']}]\n" + "\n".join(lines))
 
     # 퀘스트 보상
-    quest_rewards = detail.get("rewarded_by_quests") or []
+    quest_rewards = parse_jsonb(detail_row.get("rewarded_by_quests")) or []
     if quest_rewards:
         lines = []
         for q in quest_rewards:
@@ -428,23 +465,22 @@ def parse_detail(detail: dict | None, lang: str) -> str:
             reward = q.get("reward") or {}
             quantity = reward.get("quantity") or reward.get("count", "")
             lines.append(f"- {quest_name} ({npc_name}) → x{quantity}")
-        parts.append(f"[{lb['quest_reward']}]\n" + "\n".join(lines))
+        detail_parts.append(f"[{lb['quest_reward']}]\n" + "\n".join(lines))
 
     # 퀘스트 제출 아이템
-    quest_items = detail.get("required_by_quest_item") or []
+    quest_items = parse_jsonb(detail_row.get("required_by_quest_item")) or []
     if quest_items:
         lines = []
         for q in quest_items:
             quest_name = get_lang_value(q.get("name"), lang)
             npc_name = get_lang_value(q.get("npc_name"), lang)
             obj = q.get("objective") or {}
-            desc_key = f"description_{lang}"
-            desc = obj.get(desc_key, "")
+            desc = obj.get(f"description_{lang}", "")
             lines.append(f"- {quest_name} ({npc_name}): {desc}")
-        parts.append(f"[{lb['quest_item']}]\n" + "\n".join(lines))
+        detail_parts.append(f"[{lb['quest_item']}]\n" + "\n".join(lines))
 
     # 제작 잠금해제
-    craft_unlocks = detail.get("rewarded_by_quests_craft_unlock") or []
+    craft_unlocks = parse_jsonb(detail_row.get("rewarded_by_quests_craft_unlock")) or []
     if craft_unlocks:
         lines = []
         for q in craft_unlocks:
@@ -457,10 +493,10 @@ def parse_detail(detail: dict | None, lang: str) -> str:
             lines.append(
                 f"- {quest_name} ({npc_name}) → {trader_name} {lb['lv']}{level}"
             )
-        parts.append(f"[{lb['craft_unlock']}]\n" + "\n".join(lines))
+        detail_parts.append(f"[{lb['craft_unlock']}]\n" + "\n".join(lines))
 
     # 구매 잠금해제
-    offer_unlocks = detail.get("rewarded_by_quests_offer_unlock") or []
+    offer_unlocks = parse_jsonb(detail_row.get("rewarded_by_quests_offer_unlock")) or []
     if offer_unlocks:
         lines = []
         for q in offer_unlocks:
@@ -473,24 +509,30 @@ def parse_detail(detail: dict | None, lang: str) -> str:
             lines.append(
                 f"- {quest_name} ({npc_name}) → {trader_name} {lb['lv']}{level}"
             )
-        parts.append(f"[{lb['offer_unlock']}]\n" + "\n".join(lines))
+        detail_parts.append(f"[{lb['offer_unlock']}]\n" + "\n".join(lines))
 
-    return "\n\n".join(parts)
+    if not detail_parts:
+        return ""
+
+    parts.append("\n" + "\n\n".join(detail_parts))
+    return "\n".join(parts).strip()
 
 
-def build_craft_text(crafts: list[dict], lang: str) -> str:
-    """hideout_crafts_i18n에서 해당 아이템이 결과물인 레시피 목록"""
+# content 조합 - 제작 레시피
+def build_craft_content(item_row: dict, crafts: list[dict], lang: str) -> str:
     if not crafts:
         return ""
+
     lb = CRAFT_LABELS[lang]
     nk = NAME_KEY[lang]
-    lines = []
+    name = get_lang_value(item_row["name"], lang)
 
+    lines = []
     for c in crafts:
         duration_sec = int(c.get("duration") or 0)
         duration_str = format_duration(duration_sec, lang)
         qty = c.get("quantity", 1)
-        name = get_lang_value(c.get("name"), lang)
+        craft_name = get_lang_value(c.get("name"), lang)
         req_items = parse_jsonb(c.get("req_item")) or []
         req_str = "\n".join(
             f"  · {r['item'].get(nk, '')} x{r.get('quantity', 1)}"
@@ -498,82 +540,15 @@ def build_craft_text(crafts: list[dict], lang: str) -> str:
             if r.get("item")
         )
         lines.append(
-            f"{lb['result']}: {name} x{qty}\n"
+            f"{lb['result']}: {craft_name} x{qty}\n"
             f"{lb['duration']}: {duration_str}\n"
             f"{lb['required']}:\n{req_str}"
         )
 
-    return f"[{lb['title']}]\n" + "\n\n".join(lines)
-
-
-# content 조합
-CATEGORY_LABEL = {
-    "ko": "카테고리",
-    "en": "Category",
-    "ja": "カテゴリ",
-}
-SPEC_LABEL = {
-    "ko": "스펙",
-    "en": "Spec",
-    "ja": "スペック",
-}
-ITEM_LABEL = {
-    "ko": "아이템",
-    "en": "Item",
-    "ja": "アイテム",
-}
-
-
-def build_content(
-    item_row: dict,
-    detail_row: dict | None,
-    lang: str,
-    crafts: list[dict] | None = None,
-) -> str:
-    name = get_lang_value(item_row["name"], lang)
-    category = item_row.get("category") or ""
-    info = parse_jsonb(item_row.get("info")) or {}
-
     parts = [
         f"{ITEM_LABEL[lang]}: {name}",
-        f"{CATEGORY_LABEL[lang]}: {category}",
+        f"\n[{lb['title']}]\n" + "\n\n".join(lines),
     ]
-
-    # 카테고리별 스펙 파싱
-    parser = INFO_PARSERS.get(category, parse_default)
-    spec = parser(info, lang).strip()
-    if spec:
-        parts.append(f"\n[{SPEC_LABEL[lang]}]\n{spec}")
-
-    # 상세 정보 (hideout, quest, npc 등)
-    if detail_row:
-        detail = {
-            "hideout_items": parse_jsonb(detail_row.get("hideout_items")) or [],
-            "used_in_crafts": parse_jsonb(detail_row.get("used_in_crafts")) or [],
-            "rewarded_by_npcs": parse_jsonb(detail_row.get("rewarded_by_npcs")) or [],
-            "rewarded_by_quests": parse_jsonb(detail_row.get("rewarded_by_quests"))
-            or [],
-            "required_by_quest_item": parse_jsonb(
-                detail_row.get("required_by_quest_item")
-            )
-            or [],
-            "rewarded_by_quests_craft_unlock": parse_jsonb(
-                detail_row.get("rewarded_by_quests_craft_unlock")
-            )
-            or [],
-            "rewarded_by_quests_offer_unlock": parse_jsonb(
-                detail_row.get("rewarded_by_quests_offer_unlock")
-            )
-            or [],
-        }
-        detail_text = parse_detail(detail, lang).strip()
-        if detail_text:
-            parts.append(f"\n{detail_text}")
-
-    # 제작 레시피 (hideout_crafts_i18n)
-    craft_text = build_craft_text(crafts or [], lang).strip()
-    if craft_text:
-        parts.append(f"\n{craft_text}")
 
     return "\n".join(parts).strip()
 
@@ -596,25 +571,38 @@ async def upsert_rag_document(
     lang: str,
     content: str,
     embedding: list[float],
+    chunk_type: str,
+    ref_type: str,
+    ref_id: str,
     metadata: dict,
 ):
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
     await conn.execute(
         """
-        INSERT INTO rag_documents (source_table, source_id, lang, content, embedding, metadata)
-        VALUES ($1, $2, $3, $4, $5::vector, $6)
-        ON CONFLICT (source_table, source_id, lang)
+        INSERT INTO rag_documents (
+            source_table, source_id, lang,
+            content, embedding,
+            chunk_type, ref_type, ref_id,
+            metadata
+        )
+        VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9)
+        ON CONFLICT (source_table, source_id, lang, chunk_type)
         DO UPDATE SET
             content    = EXCLUDED.content,
             embedding  = EXCLUDED.embedding,
+            ref_type   = EXCLUDED.ref_type,
+            ref_id     = EXCLUDED.ref_id,
             metadata   = EXCLUDED.metadata,
             updated_at = NOW()
-    """,
+        """,
         "item_i18n",
         source_id,
         lang,
         content,
         embedding_str,
+        chunk_type,
+        ref_type,
+        ref_id,
         json.dumps(metadata, ensure_ascii=False),
     )
 
@@ -626,54 +614,92 @@ async def process_item(
     semaphore: asyncio.Semaphore,
     item_row: dict,
     detail_row: dict | None,
-    crafts: list[dict] | None = None,
+    crafts: list[dict] | None,
 ):
     item_id = item_row["id"]
+    info = parse_jsonb(item_row.get("info")) or {}
+    category = item_row.get("category") or ""
+    parser = INFO_PARSERS.get(category, parse_default)
+    has_spec = bool(parser(info, "en").strip())  # 스펙 존재 여부 확인용
+
+    base_metadata = {
+        "item_id": item_id,
+        "item_name": {
+            "ko": get_lang_value(item_row["name"], "ko"),
+            "en": get_lang_value(item_row["name"], "en"),
+            "ja": get_lang_value(item_row["name"], "ja"),
+        },
+        "category": category,
+        "url": f"https://eftlibrary.com/item/info/{item_row.get('url_mapping') or item_id}",
+    }
+
+    docs = [
+        {
+            "source_id": item_id,
+            "chunk_type": "identifier",
+            "build_fn": lambda lang, r=item_row: build_identifier_content(r, lang),
+            "skip": False,
+        },
+        {
+            "source_id": f"{item_id}_spec",
+            "chunk_type": "content",
+            "build_fn": lambda lang, r=item_row: build_spec_content(r, lang),
+            "skip": not has_spec,
+        },
+        {
+            "source_id": f"{item_id}_detail",
+            "chunk_type": "content",
+            "build_fn": lambda lang, r=item_row, d=detail_row: build_detail_content(
+                r, d, lang
+            ),
+            "skip": not detail_row,
+        },
+        {
+            "source_id": f"{item_id}_craft",
+            "chunk_type": "content",
+            "build_fn": lambda lang, r=item_row, c=crafts: build_craft_content(
+                r, c or [], lang
+            ),
+            "skip": not crafts,
+        },
+    ]
 
     async with semaphore:
-        for lang in LANGS:
-            content = build_content(item_row, detail_row, lang, crafts)
-
-            if not content.strip():
-                log.warning(f"  ⚠ 빈 content 스킵: {item_id} [{lang}]")
+        for doc in docs:
+            if doc["skip"]:
                 continue
 
-            try:
-                embedding = await get_embedding(client, content)
+            for lang in LANGS:
+                content = doc["build_fn"](lang)
 
-                metadata = {
-                    "content_type": "joined",
-                    "source_tables": [
-                        "item_i18n",
-                        "item_detail_i18n",
-                        "hideout_crafts_i18n",
-                    ],
-                    "item_id": item_id,
-                    "item_name": {
-                        "ko": get_lang_value(item_row["name"], "ko"),
-                        "en": get_lang_value(item_row["name"], "en"),
-                        "ja": get_lang_value(item_row["name"], "ja"),
-                    },
-                    "category": item_row.get("category") or "",
-                    "url": f"https://eftlibrary.com/item/info/{item_row.get('url_mapping') or item_id}",
-                }
+                if not content.strip():
+                    log.warning(f"  ⚠ 빈 content 스킵: {doc['source_id']} [{lang}]")
+                    continue
 
-                async with pool.acquire() as conn:
-                    await upsert_rag_document(
-                        conn, item_id, lang, content, embedding, metadata
-                    )
-                log.info(f"  ✓ {item_id} [{lang}] 완료")
+                try:
+                    embedding = await get_embedding(client, content)
 
-            except httpx.HTTPError as e:
-                log.error(f"  ✗ 임베딩 실패: {item_id} [{lang}] - {e}")
-            except asyncpg.PostgresError as e:
-                log.error(f"  ✗ DB 저장 실패: {item_id} [{lang}] - {e}")
+                    async with pool.acquire() as conn:
+                        await upsert_rag_document(
+                            conn,
+                            doc["source_id"],
+                            lang,
+                            content,
+                            embedding,
+                            doc["chunk_type"],  # identifier or content
+                            "item",
+                            item_id,  # ref_id는 항상 item_id로 통일
+                            base_metadata,
+                        )
+                    log.info(f"  ✓ {doc['source_id']} [{lang}] 완료")
+
+                except httpx.HTTPError as e:
+                    log.error(f"  ✗ 임베딩 실패: {doc['source_id']} [{lang}] - {e}")
+                except asyncpg.PostgresError as e:
+                    log.error(f"  ✗ DB 저장 실패: {doc['source_id']} [{lang}] - {e}")
 
 
 # 메인
-LANGS = ["ko", "en", "ja"]
-
-
 async def main():
     log.info("=== item_i18n 배치 임베딩 시작 ===")
     log.info(
@@ -687,7 +713,6 @@ async def main():
     semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
 
     try:
-        # 이미 처리된 아이템 ID 조회
         existing_ids = set()
         if SKIP_EXISTING:
             async with pool.acquire() as conn:
@@ -709,11 +734,11 @@ async def main():
             async with pool.acquire() as conn:
                 item_rows = await conn.fetch(
                     """
-                    SELECT i.id, i.name, i.category, i.url_mapping, i.info
-                    FROM item_i18n i
-                    ORDER BY i.id ASC
+                    SELECT id, name, category, url_mapping, info
+                    FROM item_i18n
+                    ORDER BY id ASC
                     LIMIT $1 OFFSET $2
-                """,
+                    """,
                     BATCH_SIZE,
                     offset,
                 )
@@ -727,7 +752,6 @@ async def main():
                 offset += BATCH_SIZE
                 continue
 
-            # item_detail 조회
             async with pool.acquire() as conn:
                 detail_rows = await conn.fetch(
                     """
@@ -736,19 +760,18 @@ async def main():
                            rewarded_by_quests_craft_unlock, rewarded_by_quests_offer_unlock
                     FROM item_detail_i18n
                     WHERE id = ANY($1)
-                """,
+                    """,
                     target_ids,
                 )
             detail_map = {r["id"]: dict(r) for r in detail_rows}
 
-            # hideout_crafts_i18n 조회 (해당 아이템이 결과물인 레시피)
             async with pool.acquire() as conn:
                 craft_rows = await conn.fetch(
                     """
                     SELECT reward_item_id, level, duration, quantity, req_item, name
                     FROM hideout_crafts_i18n
                     WHERE reward_item_id = ANY($1)
-                """,
+                    """,
                     target_ids,
                 )
             craft_map: dict[str, list[dict]] = {}
@@ -756,7 +779,8 @@ async def main():
                 craft_map.setdefault(r["reward_item_id"], []).append(dict(r))
 
             log.info(
-                f"배치 처리중: {offset + 1} ~ {offset + len(item_rows)} / {total} | 대상: {len(target_ids)}개"
+                f"배치 처리중: {offset + 1} ~ {offset + len(item_rows)} / {total} "
+                f"| 대상: {len(target_ids)}개"
             )
 
             tasks = [
@@ -775,12 +799,9 @@ async def main():
 
             processed += len(target_ids)
             offset += BATCH_SIZE
-
             log.info(f"누적 처리: {processed}개")
 
-        log.info(
-            f"=== 완료: {processed}개 아이템, {processed * 3}개 row 생성/업데이트 ==="
-        )
+        log.info(f"=== 완료: {processed}개 아이템 처리 ===")
 
     finally:
         await client.aclose()
