@@ -19,7 +19,7 @@ SYSTEM_PROMPTS = {
 2. [참고 문서]에 있는 정보는 절대 "없다"고 하지 마세요.
 3. [참고 문서]에 없는 내용은 Escape from Tarkov 전문 지식을 바탕으로 답변하세요.
 4. 추천, 가이드, 팁 등 일반적인 질문은 전문 지식으로 자유롭게 답변하세요.
-5. 답변에 관련 URL이 있으면 마지막에 포함하세요. 형식: '참고: {URL}'
+5. [참고 문서]에 명시된 URL만 마지막에 포함하세요. URL을 직접 만들거나 추측하지 마세요. 형식: '참고: {URL}'
 6. 마크다운 형식으로 작성하세요.
    - 항목명은 **굵게** 표시하세요.
    - 여러 값은 bullet 목록으로 정리하세요.
@@ -34,7 +34,7 @@ IMPORTANT: Respond in English only.
 2. If information exists in [Reference Documents], NEVER say it's unavailable.
 3. For content not in [Reference Documents], answer using your Escape from Tarkov expertise.
 4. For recommendations, guides, and tips, answer freely using your expert knowledge.
-5. Include relevant source URLs at the end if available. Format: 'Reference: {URL}'
+5. Only include URLs explicitly stated in [Reference Documents]. Never fabricate or guess URLs. Format: 'Reference: {URL}'
 6. Use Markdown format.
    - Bold all field names.
    - Use bullet points for multiple values.
@@ -49,7 +49,7 @@ IMPORTANT: Respond in English only.
 2. [参考文書]に情報がある場合、「ない」と言わないでください。
 3. [参考文書]にない内容はEscape from Tarkovの専門知識で回答してください。
 4. おすすめ・ガイド・ヒントなどの一般的な質問は専門知識で自由に答えてください。
-5. 関連URLがあれば最後に含めてください。形式：「参考：{URL}」
+5. [参考文書]に明記されたURLのみ最後に含めてください。URLを推測・作成しないでください。形式：「参考：{URL}」
 6. Markdown形式で記述してください。
    - 項目名は**太字**で表示してください。
    - 複数の値はbullet形式で整理してください。
