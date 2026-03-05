@@ -7,17 +7,33 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 기본 설정
-
 SOURCE_TABLE = "custom"
-SOURCE_ID = "vpn-guide"
 EMBED_MODEL = "bge-m3"
 
 BASE_URL = os.getenv("OLLAMA_BASE_URL")
 DB_URL = os.getenv("DATABASE_URL")
 
-# 다국어 콘텐츠
+METADATA = json.dumps(
+    {
+        "url": "https://aff.gearupglobal.com/product/download/HSMniDfsEY6c",
+        "keywords": [
+            "vpn",
+            "game vpn",
+            "network optimization",
+            "ping improvement",
+            "gearup",
+        ],
+    }
+)
 
+# identifier: 검색용 키워드 중심
+IDENTIFIERS = {
+    "ko": "게임 VPN 네트워크 최적화 핑 개선 패킷 손실 GearUP 추천",
+    "en": "Game VPN network optimization ping improvement packet loss GearUP recommendation",
+    "ja": "ゲームVPN ネットワーク最適化 PING改善 パケットロス GearUP おすすめ",
+}
+
+# content: 실제 안내 본문
 CONTENTS = {
     "ko": """
 게임 네트워크 최적화 추천
@@ -56,10 +72,23 @@ PING、パケットロス、ジッターを軽減します。
 """,
 }
 
-# 임베딩 함수
+DOCS = [
+    {
+        "source_id": "vpn-guide",
+        "chunk_type": "identifier",
+        "ref_id": "vpn-guide",
+        "contents": IDENTIFIERS,
+    },
+    {
+        "source_id": "vpn-guide_content",
+        "chunk_type": "content",
+        "ref_id": "vpn-guide",
+        "contents": CONTENTS,
+    },
+]
 
 
-async def embed_text(client, text):
+async def embed_text(client: httpx.AsyncClient, text: str) -> list[float]:
     resp = await client.post(
         f"{BASE_URL}/api/embed",
         json={"model": EMBED_MODEL, "input": text.strip()},
@@ -69,66 +98,67 @@ async def embed_text(client, text):
     return resp.json()["embeddings"][0]
 
 
-async def upsert_document(pool, lang, content, embedding):
+async def upsert_document(
+    pool: asyncpg.Pool,
+    source_id: str,
+    lang: str,
+    content: str,
+    embedding: list[float],
+    chunk_type: str,
+    ref_id: str,
+):
     embedding_str = "[" + ",".join(f"{x:.6f}" for x in embedding) + "]"
-
     async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO rag_documents
-            (source_table, source_id, lang, content, embedding,
-             chunk_type, ref_type, ref_id, metadata)
+                (source_table, source_id, lang, content, embedding,
+                 chunk_type, ref_type, ref_id, metadata)
             VALUES ($1, $2, $3, $4, $5::vector, $6, $7, $8, $9)
             ON CONFLICT (source_table, source_id, lang, chunk_type)
             DO UPDATE SET
-                content = EXCLUDED.content,
-                embedding = EXCLUDED.embedding,
-                ref_type = EXCLUDED.ref_type,
-                ref_id = EXCLUDED.ref_id,
-                metadata = EXCLUDED.metadata,
+                content    = EXCLUDED.content,
+                embedding  = EXCLUDED.embedding,
+                ref_type   = EXCLUDED.ref_type,
+                ref_id     = EXCLUDED.ref_id,
+                metadata   = EXCLUDED.metadata,
                 updated_at = NOW()
             """,
             SOURCE_TABLE,
-            SOURCE_ID,
+            source_id,
             lang,
             content.strip(),
             embedding_str,
-            "content",  # chunk_type
-            "custom",  # ref_type
-            SOURCE_ID,  # ref_id
-            json.dumps(
-                {
-                    "url": "https://aff.gearupglobal.com/product/download/HSMniDfsEY6c",
-                    "keywords": [
-                        "vpn",
-                        "game vpn",
-                        "network optimization",
-                        "ping improvement",
-                        "gearup",
-                    ],
-                }
-            ),
+            chunk_type,
+            "custom",
+            ref_id,
+            METADATA,
         )
 
 
-# 전체 처리 함수 (병렬 임베딩)
-
-
-async def process_language(client, pool, lang, content):
+async def process(client: httpx.AsyncClient, pool: asyncpg.Pool, doc: dict, lang: str):
+    content = doc["contents"][lang]
     embedding = await embed_text(client, content)
-    await upsert_document(pool, lang, content, embedding)
+    await upsert_document(
+        pool,
+        doc["source_id"],
+        lang,
+        content,
+        embedding,
+        doc["chunk_type"],
+        doc["ref_id"],
+    )
+    print(f"  ✓ {doc['source_id']} [{lang}]")
 
 
 async def main():
     async with httpx.AsyncClient() as client:
         async with asyncpg.create_pool(DB_URL) as pool:
-
             tasks = [
-                process_language(client, pool, lang, content)
-                for lang, content in CONTENTS.items()
+                process(client, pool, doc, lang)
+                for doc in DOCS
+                for lang in IDENTIFIERS.keys()
             ]
-
-            # 예외 발생 시 바로 에러 표시
             await asyncio.gather(*tasks, return_exceptions=False)
 
     print("✅ done")
