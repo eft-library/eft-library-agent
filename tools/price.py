@@ -100,7 +100,8 @@ async def get_item_prices(item_ids: list[str], lang: str = "ko") -> dict[str, st
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, trader, update_time
+            SELECT id, trader,
+                   update_time + INTERVAL '9 hours' AS update_time
             FROM item_price_i18n
             WHERE id = ANY($1)
         """,
