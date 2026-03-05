@@ -6,7 +6,7 @@ quest_i18n + npc_i18n 배치 임베딩 스크립트
 - rag_documents 테이블에 upsert
 
 청크 분리:
-  - quest_id       : 퀘스트명 + 상인명 (chunk_type: identifier) → RDB 조회용
+  - quest_id       : 퀘스트명 + 상인명 + 목표 (chunk_type: identifier) → 맵/위치 검색용
   - quest_id_main  : 기본정보 + 목표 + 보상 (chunk_type: content)
   - quest_id_guide : 가이드 (chunk_type: content)
 """
@@ -35,7 +35,9 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# 유틸
+# ── 유틸 ───────
+
+
 def get_lang_value(jsonb_field: dict | str | None, lang: str) -> str:
     if not jsonb_field:
         return ""
@@ -73,7 +75,8 @@ def yn(value: bool | None, lang: str) -> str:
     return "✅" if value else "❌"
 
 
-# 라벨
+# ── 라벨 ───────
+
 LABELS = {
     "ko": {
         "quest": "퀘스트",
@@ -119,15 +122,43 @@ LABELS = {
 NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
 
 
-# content 조합 - 퀘스트명 + 상인명 (identifier)
+# ── content 빌더
+
+
 def build_identifier_content(quest: dict, npc_name: str, lang: str) -> str:
+    """퀘스트명 + 상인명 + 목표 → 맵/위치 키워드 포함으로 검색 정확도 향상"""
     lb = LABELS[lang]
+    nk = NAME_KEY[lang]
+
     quest_name = get_lang_value(quest["name"], lang)
-    return f"{lb['quest']}: {quest_name}\n{lb['trader']}: {npc_name}"
+    objectives = parse_jsonb(quest.get("objectives")) or []
+
+    parts = [
+        f"{lb['quest']}: {quest_name}",
+        f"{lb['trader']}: {npc_name}",
+    ]
+
+    if objectives:
+        lines = []
+        for obj in objectives:
+            desc_key = f"description_{lang}"
+            desc = obj.get(desc_key, "")
+            items = obj.get("items") or []
+            line = f"- {desc}"
+            if items:
+                item_names = ", ".join(i.get(nk) or i.get("name_en", "") for i in items)
+                line += f" [{item_names}]"
+            lines.append(line)
+        parts.append(f"\n[{lb['objectives']}]\n" + "\n".join(lines))
+
+    return "\n".join(parts).strip()
 
 
-# content 조합 - 기본정보 + 목표 + 보상
+# content 조합 - 퀘스트명 + 상인명 (identifier) -- 구버전 제거됨
+
+
 def build_main_content(quest: dict, npc_name: str, lang: str) -> str:
+    """기본정보 + 목표 + 보상"""
     lb = LABELS[lang]
     nk = NAME_KEY[lang]
 
@@ -174,7 +205,6 @@ def build_main_content(quest: dict, npc_name: str, lang: str) -> str:
             desc = obj.get(desc_key, "")
             count = obj.get("count")
             items = obj.get("items") or []
-
             line = f"- {desc}"
             if count and count > 1:
                 line += f" ({count}개)" if lang == "ko" else f" (x{count})"
@@ -214,8 +244,8 @@ def build_main_content(quest: dict, npc_name: str, lang: str) -> str:
     return "\n".join(parts).strip()
 
 
-# content 조합 - 가이드
 def build_guide_content(quest: dict, npc_name: str, lang: str) -> str:
+    """가이드"""
     lb = LABELS[lang]
 
     quest_name = get_lang_value(quest["name"], lang)
@@ -233,7 +263,9 @@ def build_guide_content(quest: dict, npc_name: str, lang: str) -> str:
     return "\n".join(parts).strip()
 
 
-# 임베딩 생성
+# ── 임베딩 + upsert ────────────────────────────────────────────────────────────
+
+
 async def get_embedding(client: httpx.AsyncClient, text: str) -> list[float]:
     response = await client.post(
         f"{OLLAMA_BASE_URL}/api/embed",
@@ -244,7 +276,6 @@ async def get_embedding(client: httpx.AsyncClient, text: str) -> list[float]:
     return response.json()["embeddings"][0]
 
 
-# DB upsert
 async def upsert_rag_document(
     conn: asyncpg.Connection,
     source_id: str,
@@ -287,7 +318,9 @@ async def upsert_rag_document(
     )
 
 
-# 배치 처리
+# ── 배치 처리 ───
+
+
 async def process_batch(
     conn: asyncpg.Connection, client: httpx.AsyncClient, rows: list[dict], npc_map: dict
 ):
@@ -351,14 +384,13 @@ async def process_batch(
 
                 try:
                     embedding = await get_embedding(client, content)
-
                     await upsert_rag_document(
                         conn,
                         doc["source_id"],
                         lang,
                         content,
                         embedding,
-                        doc["chunk_type"],  # identifier or content
+                        doc["chunk_type"],
                         "quest",
                         quest_id,  # ref_id는 항상 quest_id로 통일
                         base_metadata,
@@ -371,7 +403,9 @@ async def process_batch(
                     log.error(f"  ✗ DB 저장 실패: {doc['source_id']} [{lang}] - {e}")
 
 
-# 메인
+# ── 메인 ───────
+
+
 async def main():
     log.info("=== quest_i18n 배치 임베딩 시작 ===")
     log.info(f"모델: {EMBED_MODEL} | 배치 크기: {BATCH_SIZE} | 언어: {LANGS}")

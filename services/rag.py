@@ -75,7 +75,7 @@ async def run_rag_pipeline_stream(
     docs = await search_rag(
         query=user_query,
         lang=lang,
-        limit=rag_limit,
+        limit=int(os.getenv("RAG_LIMIT")),
         source_table=source_table,
     )
 

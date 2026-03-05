@@ -87,7 +87,7 @@ async def chat_llm_stream(
         "think": False,
         "options": {
             "temperature": 0.1,
-            "num_ctx": 32768,
+            "num_ctx": int(os.getenv("NUM_CTX")),
         },
     }
 
