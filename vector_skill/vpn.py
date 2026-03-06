@@ -28,9 +28,9 @@ METADATA = json.dumps(
 
 # identifier: 검색용 키워드 중심
 IDENTIFIERS = {
-    "ko": "게임 VPN 네트워크 최적화 핑 개선 패킷 손실 GearUP 추천",
-    "en": "Game VPN network optimization ping improvement packet loss GearUP recommendation",
-    "ja": "ゲームVPN ネットワーク最適化 PING改善 パケットロス GearUP おすすめ",
+    "ko": "타르코프 EFT Escape from Tarkov 게임 VPN 네트워크 최적화 핑 개선 패킷 손실 GearUP 추천",
+    "en": "Tarkov EFT Escape from Tarkov Game VPN network optimization ping improvement packet loss GearUP recommendation",
+    "ja": "タルコフ EFT Escape from Tarkov ゲームVPN ネットワーク最適化 PING改善 パケットロス GearUP おすすめ",
 }
 
 # content: 실제 안내 본문
