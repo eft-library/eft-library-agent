@@ -123,20 +123,29 @@ NAME_KEY = {"ko": "name_ko", "en": "name_en", "ja": "name_ja"}
 
 
 # ── content 빌더
-
-
 def build_identifier_content(quest: dict, npc_name: str, lang: str) -> str:
-    """퀘스트명 + 상인명 + 목표 → 맵/위치 키워드 포함으로 검색 정확도 향상"""
+    """
+    퀘스트명 + 상인명 + 목표 → 맵/위치 키워드 포함으로 검색 정확도 향상
+    레벨, 카파, 라이트키퍼 여부 추가
+    """
     lb = LABELS[lang]
     nk = NAME_KEY[lang]
 
     quest_name = get_lang_value(quest["name"], lang)
     objectives = parse_jsonb(quest.get("objectives")) or []
+    min_level = quest.get("min_player_level") or ""
+    kappa = yn(quest.get("kappa_required"), lang)
+    lightkeeper = yn(quest.get("lightkeeper_required"), lang)
 
     parts = [
         f"{lb['quest']}: {quest_name}",
         f"{lb['trader']}: {npc_name}",
     ]
+
+    if min_level:
+        parts.append(f"{lb['min_level']}: {min_level}")
+    parts.append(f"{lb['kappa']}: {kappa}")
+    parts.append(f"{lb['lightkeeper']}: {lightkeeper}")
 
     if objectives:
         lines = []
@@ -163,10 +172,6 @@ def build_main_content(quest: dict, npc_name: str, lang: str) -> str:
     nk = NAME_KEY[lang]
 
     quest_name = get_lang_value(quest["name"], lang)
-    min_level = quest.get("min_player_level") or ""
-    kappa = yn(quest.get("kappa_required"), lang)
-    lightkeeper = yn(quest.get("lightkeeper_required"), lang)
-
     task_reqs = parse_jsonb(quest.get("task_requirements")) or []
     task_next = parse_jsonb(quest.get("task_next")) or []
     objectives = parse_jsonb(quest.get("objectives")) or []
@@ -176,10 +181,6 @@ def build_main_content(quest: dict, npc_name: str, lang: str) -> str:
         f"{lb['quest']}: {quest_name}",
         f"{lb['trader']}: {npc_name}",
     ]
-    if min_level:
-        parts.append(f"{lb['min_level']}: {min_level}")
-    parts.append(f"{lb['kappa']}: {kappa}")
-    parts.append(f"{lb['lightkeeper']}: {lightkeeper}")
 
     # 선행 퀘스트
     if task_reqs:

@@ -6,7 +6,7 @@ map_group_i18n + extraction_i18n + transit_i18n 배치 임베딩 스크립트
 
 청크 분리:
   - {map_id}           : 이름만 (chunk_type: identifier) → RDB 조회용
-  - {map_id}_main      : 기본 정보 + 구역 목록 (chunk_type: content)
+  - {map_id}_main      : 기본 정보 + 구역 목록 + 스폰 보스 (chunk_type: content)
   - {map_id}_extract   : 탈출구 목록 (chunk_type: content)
   - {map_id}_transit   : 트랜짓 목록 (chunk_type: content)
 """
@@ -76,6 +76,19 @@ def get_lang_value(jsonb_field, lang: str) -> str:
     return jsonb_field.get(lang, "") or ""
 
 
+def parse_jsonb(value) -> list | dict | None:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 # ── 라벨 ──────────────────────────────────────────────────────────────────────
 
 LANG_LABELS = {
@@ -93,6 +106,7 @@ LANG_LABELS = {
         "tip": "팁",
         "yes": "✅",
         "no": "❌",
+        "boss_spawn": "스폰 보스",
     },
     "en": {
         "map": "Map",
@@ -108,6 +122,7 @@ LANG_LABELS = {
         "tip": "Tip",
         "yes": "✅",
         "no": "❌",
+        "boss_spawn": "Spawning Bosses",
     },
     "ja": {
         "map": "マップ",
@@ -123,6 +138,7 @@ LANG_LABELS = {
         "tip": "ヒント",
         "yes": "✅",
         "no": "❌",
+        "boss_spawn": "スポーンボス",
     },
 }
 
@@ -142,18 +158,21 @@ def build_identifier_content(map_row: dict, lang: str) -> str:
     return f"{keywords[lang]}\n{label['map']}: {map_name}"
 
 
-def build_map_content(map_row: dict, sub_areas: list, lang: str) -> str:
-    """기본 정보 + 구역 목록 (chunk_type: content)"""
+def build_map_content(map_row: dict, sub_areas: list, bosses: list, lang: str) -> str:
+    """기본 정보 + 구역 목록 + 스폰 보스 (chunk_type: content)"""
     label = LANG_LABELS[lang]
     map_name = get_lang_value(map_row["name"], lang)
     map_name_ko = get_lang_value(map_row["name"], "ko")
     map_name_en = get_lang_value(map_row["name"], "en")
+    map_id = map_row["id"]
+
     keywords = {
         "ko": f"{map_name} 맵 지도 기본 정보 구역 {map_name_en}",
         "en": f"{map_name} map basic info areas {map_name_ko}",
         "ja": f"{map_name} マップ 基本情報 エリア {map_name_en}",
     }
     parts = [keywords[lang], f"{label['map']}: {map_name}"]
+
     if sub_areas:
         lines = [
             f"- {get_lang_value(a['name'], lang)}"
@@ -162,6 +181,27 @@ def build_map_content(map_row: dict, sub_areas: list, lang: str) -> str:
         ]
         if lines:
             parts.append(f"\n[{label['sub_areas']}]\n" + "\n".join(lines))
+
+    if bosses:
+        lines = []
+        for boss in bosses:
+            boss_name = get_lang_value(boss["name"], lang)
+            spawn_chance = parse_jsonb(boss.get("spawn_chance")) or []
+
+            # 해당 맵의 스폰 확률 찾기
+            chance_str = ""
+            for sc in spawn_chance:
+                sc_map_id = sc.get("name_en", "").upper().replace(" ", "_")
+                if sc_map_id == map_id.upper():
+                    chance = sc.get("spawnChance", "")
+                    if chance != "":
+                        chance_str = f" ({int(float(chance) * 100)}%)"
+                    break
+
+            lines.append(f"- {boss_name}{chance_str}")
+
+        parts.append(f"\n[{label['boss_spawn']}]\n" + "\n".join(lines))
+
     return "\n".join(parts).strip()
 
 
@@ -293,6 +333,21 @@ async def upsert_rag_document(
 
 async def process_map(conn, client, map_row, sub_areas, extractions, transits):
     map_id = map_row["id"]
+
+    # 해당 맵에 스폰하는 보스 조회
+    boss_rows = await conn.fetch(
+        """
+        SELECT name, spawn_chance
+        FROM boss_i18n
+        WHERE is_boss = true
+          AND $1 = ANY(spawn_map)
+        ORDER BY "order" ASC NULLS LAST
+        """,
+        map_id.upper(),
+    )
+    bosses = [dict(r) for r in boss_rows]
+    log.info(f"  보스 {len(bosses)}개 조회됨: {map_id}")
+
     base_metadata = {
         "map_id": map_id,
         "map_name": {
@@ -306,7 +361,7 @@ async def process_map(conn, client, map_row, sub_areas, extractions, transits):
     docs = [
         {
             "source_id": map_id,
-            "chunk_type": "identifier",  # 이름만 → RDB 조회용
+            "chunk_type": "identifier",
             "ref_type": "map",
             "ref_id": map_id,
             "build_fn": lambda lang: build_identifier_content(map_row, lang),
@@ -315,16 +370,18 @@ async def process_map(conn, client, map_row, sub_areas, extractions, transits):
         },
         {
             "source_id": f"{map_id}_main",
-            "chunk_type": "content",  # 기본 정보 + 구역 목록
+            "chunk_type": "content",
             "ref_type": "map",
             "ref_id": map_id,
-            "build_fn": lambda lang: build_map_content(map_row, sub_areas, lang),
-            "extra": {"sub_area_count": len(sub_areas)},
+            "build_fn": lambda lang: build_map_content(
+                map_row, sub_areas, bosses, lang
+            ),
+            "extra": {"sub_area_count": len(sub_areas), "boss_count": len(bosses)},
             "skip": False,
         },
         {
             "source_id": f"{map_id}_extract",
-            "chunk_type": "content",  # 탈출구 목록
+            "chunk_type": "content",
             "ref_type": "map",
             "ref_id": map_id,
             "build_fn": lambda lang: build_extraction_content(
@@ -335,7 +392,7 @@ async def process_map(conn, client, map_row, sub_areas, extractions, transits):
         },
         {
             "source_id": f"{map_id}_transit",
-            "chunk_type": "content",  # 트랜짓 목록
+            "chunk_type": "content",
             "ref_type": "map",
             "ref_id": map_id,
             "build_fn": lambda lang: build_transit_content(map_row, transits, lang),
