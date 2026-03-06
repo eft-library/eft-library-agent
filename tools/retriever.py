@@ -12,77 +12,13 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
 CHAT_MODEL = os.getenv("OLLAMA_CHAT_MODEL")
 
 
-CONDITION_KEYWORDS = [
-    # 추천/조건
-    "추천",
-    "추천해",
-    "뭐가 좋",
-    "어떤 거",
-    "어떤게",
-    "레벨",
-    "lv",
-    "level",
-    "쉬운",
-    "어려운",
-    "초보",
-    "빠른",
-    "효율",
-    # 영어
-    "recommend",
-    "best",
-    "cheap",
-    "easy",
-    "beginner",
-    # 일본어
-    "おすすめ",
-    "レベル",
-    "安い",
-    "簡単",
-]
-
-ENTITY_KEYWORDS = [
-    # 특정 이름을 묻는 패턴
-    "어디서",
-    "어디에",
-    "위치",
-    "어떻게 쓰",
-    "뭐야",
-    "뭔가요",
-    "무엇",
-    "정보",
-    "스펙",
-    "능력치",
-    "스탯",
-]
-
-
-def classify_by_keyword(query: str) -> str | None:
-    """
-    키워드로 확실히 분류 가능하면 반환, 불확실하면 None
-    """
-    query_lower = query.lower()
-
-    if any(kw in query_lower for kw in CONDITION_KEYWORDS):
-        return "condition"
-
-    if any(kw in query_lower for kw in ENTITY_KEYWORDS):
-        return "entity"
-
-    return None  # 불확실 → LLM으로
-
-
 async def classify_query(query: str) -> str:
-    # 1. 키워드로 먼저 시도
-    keyword_result = classify_by_keyword(query)
-    if keyword_result:
-        log.info(
-            f"[retriever] 쿼리 분류 (키워드): {keyword_result} query={query[:30]}..."
-        )
-        return keyword_result
-
-    # 2. 불확실한 경우만 LLM 호출
-    try:
-        prompt = f"""다음 쿼리가 어떤 유형인지 분류하세요.
+    """
+    쿼리 의도 분류
+    - entity: 특정 보스/아이템/퀘스트 이름 검색 → identifier 우선
+    - condition: 레벨/조건/속성/추천 검색 → content 직접 검색
+    """
+    prompt = f"""다음 쿼리가 어떤 유형인지 분류하세요.
 
 - entity: 특정 보스, 아이템, 퀘스트, 맵 등의 이름을 찾는 질문
 - condition: 레벨, 가격, 효과, 추천, 조건 등으로 검색하는 질문
@@ -91,30 +27,28 @@ async def classify_query(query: str) -> str:
 
 반드시 JSON만 응답하세요: {{"type": "entity"}} 또는 {{"type": "condition"}}"""
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{OLLAMA_BASE_URL}/api/chat",
-                json={
-                    "model": CHAT_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                },
-                timeout=5.0,  # 짧게 잡아서 느리면 바로 fallback
-            )
-            response.raise_for_status()
-            text = response.json()["message"]["content"].strip()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json={
+                "model": CHAT_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+            },
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        text = response.json()["message"]["content"].strip()
+        try:
             result = json.loads(text)
             query_type = result.get("type", "entity")
             if query_type not in ("entity", "condition"):
                 query_type = "entity"
+        except json.JSONDecodeError:
+            query_type = "entity"  # 파싱 실패 시 기존 방식 유지
 
-        log.info(f"[retriever] 쿼리 분류 (LLM): {query_type} query={query[:30]}...")
-        return query_type
-
-    except Exception as e:
-        # 3. LLM 실패 시 entity fallback (기존 방식 유지)
-        log.warning(f"[retriever] 쿼리 분류 실패, entity fallback: {e}")
-        return "entity"
+    log.info(f"[retriever] 쿼리 분류: {query_type} query={query[:30]}...")
+    return query_type
 
 
 async def search_rag(
