@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from db.connection import get_pool
@@ -35,7 +36,7 @@ async def classify_query(query: str) -> str:
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
             },
-            timeout=10.0,
+            timeout=30.0,
         )
         response.raise_for_status()
         text = response.json()["message"]["content"].strip()
@@ -62,10 +63,12 @@ async def search_rag(
     - entity:    identifier 벡터 검색 → ref_id 추출 → content 조회
     - condition: content 직접 벡터 검색
     """
-    embedding = await get_embedding(query)
+    # embed와 classify를 병렬로 실행해 지연 시간 최소화
+    embedding, query_type = await asyncio.gather(
+        get_embedding(query),
+        classify_query(query),
+    )
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
-
-    query_type = await classify_query(query)
 
     pool = await get_pool()
     async with pool.acquire() as conn:
