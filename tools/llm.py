@@ -103,6 +103,17 @@ async def chat_llm_stream(
 
     # 디버그 로그
     log.info(f"[llm_stream] context 길이: {len(context)}")
+
+    # RAG 결과 없으면 바로 반환
+    if not context:
+        no_result_msg = {
+            "ko": "관련 정보를 찾을 수 없습니다. 다른 검색어로 시도해보세요.",
+            "en": "No relevant information found. Please try a different search term.",
+            "ja": "関連情報が見つかりませんでした。別の検索ワードをお試しください。",
+        }
+        yield no_result_msg.get(lang, no_result_msg["ko"])
+        return
+
     payload = {
         "model": CHAT_MODEL,
         "messages": [

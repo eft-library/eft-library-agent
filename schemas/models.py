@@ -13,6 +13,7 @@ class SearchRagInput(BaseModel):
 class RagDocument(BaseModel):
     source_table: str
     source_id: str
+    ref_id: str
     lang: str
     content: str
     metadata: dict[str, Any]
