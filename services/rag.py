@@ -7,6 +7,8 @@ from tools.price import get_item_prices
 from schemas.models import ChatMessage, RagDocument
 import os
 
+from tools.router import rule_based_routing
+
 log = logging.getLogger(__name__)
 
 
@@ -70,6 +72,9 @@ async def run_rag_pipeline_stream(
 
     # 2. 사용자 메시지 저장
     await save_message(session_id, "user", user_query, lang)
+
+    if source_table is None:
+        source_table = rule_based_routing(user_query)
 
     # 3. RAG 검색
     docs = await search_rag(
