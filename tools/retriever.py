@@ -205,6 +205,7 @@ async def search_rag(
                 source_table=row["source_table"],
                 source_id=row["source_id"],
                 lang=row["lang"],
+                ref_id=row["ref_id"],
                 content=row["content"],
                 metadata=metadata,
                 similarity=similarity,
