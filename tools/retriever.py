@@ -7,9 +7,9 @@ import os
 
 log = logging.getLogger(__name__)
 
-SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD"))
-TRGM_THRESHOLD = float(os.getenv("RAG_TRGM_THRESHOLD"))
-RRF_K = int(os.getenv("RAG_RRF_K"))
+SIMILARITY_THRESHOLD = float(os.getenv("RAG_SIMILARITY_THRESHOLD", "0.50"))
+TRGM_THRESHOLD = float(os.getenv("RAG_TRGM_THRESHOLD", "0.08"))
+RRF_K = int(os.getenv("RAG_RRF_K", "60"))
 
 
 def _reciprocal_rank_fusion(
@@ -136,21 +136,31 @@ async def search_rag(
             log.info(f"[retriever] 검색 결과 없음 query={query[:30]}...")
             return []
 
-        # 벡터 similarity 맵 (임계값 필터링 + 로그용)
+        # 벡터 similarity 맵: (source_table, ref_id) → similarity
         vector_similarity_map: dict[tuple[str, str], float] = {
             (row["source_table"], row["ref_id"]): round(float(row["similarity"]), 4)
             for row in vector_rows
         }
 
+        # trgm similarity 맵: (source_table, ref_id) → similarity
+        trgm_similarity_map: dict[tuple[str, str], float] = {
+            (row["source_table"], row["ref_id"]): round(float(row["similarity"]), 4)
+            for row in trgm_rows
+        }
+
+        log.info(f"[retriever] vector_similarity_map: {vector_similarity_map}")
+        log.info(f"[retriever] trgm_similarity_map: {trgm_similarity_map}")
+
         # ── 임계값 필터링 ────────────────────────────────────────────────────
-        # trgm에서만 히트한 경우(벡터 similarity 없음)는 trgm 결과를 신뢰해서 통과
+        # 벡터 >= THRESHOLD → 통과
+        # trgm에만 있거나 trgm+벡터 둘 다 있는 경우 → 통과 (하이브리드 보완)
         filtered_keys = [
             key
             for key, rrf_score in sorted(
                 rrf_scores.items(), key=lambda x: x[1], reverse=True
             )
             if vector_similarity_map.get(key, 0.0) >= SIMILARITY_THRESHOLD
-            or key not in vector_similarity_map  # trgm에서만 찾힌 경우
+            or trgm_similarity_map.get(key, 0.0) > 0.0
         ][:limit]
 
         if not filtered_keys:
@@ -161,6 +171,8 @@ async def search_rag(
                 f"query={query[:30]}..."
             )
             return []
+
+        log.info(f"[retriever] filtered_keys: {filtered_keys}")
 
         source_tables = [k[0] for k in filtered_keys]
         ref_ids = [k[1] for k in filtered_keys]
@@ -190,22 +202,26 @@ async def search_rag(
         )
 
     # ── 결과 조합 ────────────────────────────────────────────────────────────
+    # RRF 순서 맵: (source_table, ref_id) → rank
+    rrf_key_order = {key: rank for rank, key in enumerate(filtered_keys)}
+
     results = []
     for row in content_rows:
         metadata = row["metadata"]
         if isinstance(metadata, str):
             metadata = json.loads(metadata)
 
-        similarity = vector_similarity_map.get(
-            (row["source_table"], row["ref_id"]), 0.0
-        )
+        key = (row["source_table"], row["ref_id"])
+
+        # similarity: 벡터 우선, 없으면 trgm 사용
+        similarity = vector_similarity_map.get(key) or trgm_similarity_map.get(key, 0.0)
 
         results.append(
             RagDocument(
                 source_table=row["source_table"],
                 source_id=row["source_id"],
-                lang=row["lang"],
                 ref_id=row["ref_id"],
+                lang=row["lang"],
                 content=row["content"],
                 metadata=metadata,
                 similarity=similarity,
@@ -213,11 +229,7 @@ async def search_rag(
         )
 
     # RRF 점수 기준으로 정렬
-    rrf_key_order = {key: rank for rank, key in enumerate(filtered_keys)}
     results.sort(key=lambda r: rrf_key_order.get((r.source_table, r.ref_id), 999))
-
-    for row in content_rows:
-        log.info(f"content row: source_id={row['source_id']} ref_id={row['ref_id']}")
 
     log.info(
         f"[retriever] 2단계 완료: content {len(results)}개 조회 "
