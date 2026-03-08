@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastmcp import FastMCP
-from schemas.models import ChatMessage
+from tools.router import rule_based_routing
 from tools.retriever import search_rag as _search_rag
 from tools.history import save_message as _save_message, get_history as _get_history
 from db.connection import get_pool
@@ -97,15 +97,10 @@ async def search_rag(
     limit: int = int(os.getenv("RAG_LIMIT")),
     source_table: str | None = None,
 ) -> list[dict]:
-    """
-    pgvector에서 질문과 유사한 문서를 검색합니다.
+    # source_table 미지정 시 규칙 기반 라우팅
+    if source_table is None:
+        source_table = rule_based_routing(query)
 
-    Args:
-        query:        검색할 질문 텍스트
-        lang:         언어 (ko / en / ja)
-        limit:        반환할 문서 수 (기본 3)
-        source_table: 특정 테이블만 검색 (None이면 전체)
-    """
     docs = await _search_rag(
         query=query, lang=lang, limit=limit, source_table=source_table
     )
