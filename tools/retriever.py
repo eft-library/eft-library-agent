@@ -216,6 +216,9 @@ async def search_rag(
     rrf_key_order = {key: rank for rank, key in enumerate(filtered_keys)}
     results.sort(key=lambda r: rrf_key_order.get((r.source_table, r.ref_id), 999))
 
+    for row in content_rows:
+        log.info(f"content row: source_id={row['source_id']} ref_id={row['ref_id']}")
+
     log.info(
         f"[retriever] 2단계 완료: content {len(results)}개 조회 "
         f"query={query[:30]}... lang={lang}"
