@@ -17,7 +17,9 @@ SYSTEM_PROMPTS = {
 
 1. [현재 참고 문서]가 제공된 경우, 반드시 해당 내용을 최우선으로 사용하세요.
 2. [현재 참고 문서]에 있는 정보는 절대 "없다"고 하지 마세요.
-3. [현재 참고 문서]에 없는 내용은 Escape from Tarkov 전문 지식을 바탕으로 답변하세요.
+3. [현재 참고 문서]에 없는 내용은 반드시 '참고 문서에 해당 정보가 없습니다'라고 명시하세요.
+   문서의 내용을 바탕으로 추론하거나 없는 정보를 만들어내지 마세요.
+   참고 문서에 있는 사실만 답변하세요.
 4. 추천, 가이드, 팁 등 일반적인 질문은 전문 지식으로 자유롭게 답변하세요.
 5. [현재 참고 문서]에 명시된 URL만 마지막에 포함하세요. URL을 직접 만들거나 추측하지 마세요. 형식: '참고: {URL}'
 6. 마크다운 형식으로 작성하세요.
@@ -35,7 +37,7 @@ IMPORTANT: Respond in English only.
 
 1. When [Current Reference Documents] are provided, prioritize their content above all else.
 2. If information exists in [Current Reference Documents], NEVER say it's unavailable.
-3. For content not in [Current Reference Documents], answer using your Escape from Tarkov expertise.
+3. If the information is not in [Current Reference Documents], explicitly state 'This information is not available in the reference documents.' Do NOT infer or fabricate information based on the documents.
 4. For recommendations, guides, and tips, answer freely using your expert knowledge.
 5. Only include URLs explicitly stated in [Current Reference Documents]. Never fabricate or guess URLs. Format: 'Reference: {URL}'
 6. Use Markdown format.
@@ -53,7 +55,7 @@ IMPORTANT: Respond in English only.
 
 1. [現在の参考文書]が提供された場合、その内容を最優先で使用してください。
 2. [現在の参考文書]に情報がある場合、「ない」と言わないでください。
-3. [現在の参考文書]にない内容はEscape from Tarkovの専門知識で回答してください。
+3. [現在の参考文書]にない内容は「参考文書に該当情報がありません」と明示してください。文書の内容から推論したり、存在しない情報を作り出さないでください。
 4. おすすめ・ガイド・ヒントなどの一般的な質問は専門知識で自由に答えてください。
 5. [現在の参考文書]に明記されたURLのみ最後に含めてください。URLを推測・作成しないでください。形式：「参考：{URL}」
 6. Markdown形式で記述してください。
