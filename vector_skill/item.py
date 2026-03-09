@@ -365,9 +365,11 @@ def format_duration(seconds: int, lang: str) -> str:
 
 # content 조합 - 이름 + 카테고리 (identifier)
 def build_identifier_content(item_row: dict, lang: str) -> str:
-    name = get_lang_value(item_row["name"], lang)
+    name_ko = get_lang_value(item_row["name"], "ko")
+    name_en = get_lang_value(item_row["name"], "en")
+    name_ja = get_lang_value(item_row["name"], "ja")
     category = item_row.get("category") or ""
-    return f"{ITEM_LABEL[lang]}: {name}\n{CATEGORY_LABEL[lang]}: {category}"
+    return f"{ITEM_LABEL[lang]}: {name_ko} | {name_en} | {name_ja}\n{CATEGORY_LABEL[lang]}: {category}"
 
 
 # content 조합 - 카테고리별 스펙
