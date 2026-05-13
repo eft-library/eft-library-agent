@@ -1,0 +1,437 @@
+# RAG Agent Migration Guidance
+
+This repository is being migrated to the normalized EFT Library platform schema.
+The previous RAG implementation was built around legacy `*_i18n` tables and must be treated as reference-only.
+
+---
+
+## Source Of Truth
+
+Use the current platform schema as the authoritative database contract:
+
+- `/Users/sun-yeob/Desktop/Work/my_git/eftLibrary/eft-library-back/platform_db.sql`
+
+Before changing any database query, RAG builder, retriever, router, or metadata mapping, inspect `platform_db.sql` first.
+
+Do not infer table names, column names, JSON structures, or relationships from the legacy agent code.
+
+---
+
+## Local Models
+
+The local Ollama models currently used by this agent are:
+
+- Chat model: `qwen3.5:4b`
+- Embedding model: `bge-m3:latest`
+
+Design prompts, context size, chunk size, and retrieval strategy with these local model limits in mind.
+Prefer concise, high-signal context over large stuffed prompts.
+
+---
+
+## Migration Strategy
+
+Build the new RAG implementation as a separate V3 path first.
+
+- Do not destructively rewrite the existing legacy RAG pipeline until V3 is verified.
+- Prefer new files, functions, and schemas with a `v3` suffix or namespace.
+- Keep legacy code available for behavior comparison only.
+- Do not mix legacy `*_i18n` assumptions with normalized V3 joins in the same function.
+
+Examples:
+
+- `search_rag` -> keep legacy behavior
+- `search_rag_v3` -> new normalized-schema retriever
+- `vector_skill/item.py` -> legacy reference
+- `rag_builders_v3/item.py` -> new item RAG builder
+
+---
+
+## Agent-Owned SQL
+
+Agent-owned tables such as RAG documents, chat messages, retrieval logs, and ingestion state should be created from SQL files in this repository.
+
+Do not hide table DDL inside Python code, README snippets, or one-off manual commands.
+
+Recommended structure:
+
+```text
+sql/
+  001_agent_core_v3.sql
+```
+
+The SQL file should include all DDL needed for the agent-specific storage layer, including extensions, tables, indexes, generated/search columns, and comments where useful.
+
+Expected V3-owned tables may include:
+
+- `rag_documents_v3`
+- `chat_messages_v3`
+- `rag_ingestion_runs_v3`
+- `rag_search_logs_v3` if search observability is needed
+
+Keep platform domain tables in `platform_db.sql`.
+Keep agent runtime/RAG tables in this repository's SQL files.
+
+When changing the RAG document schema, update the SQL file first, then update Python models, builders, retrievers, and tests to match it.
+
+---
+
+## RAG Document Design
+
+Do not bind RAG document identity directly to source table names like `item_i18n` or `quest_i18n`.
+Use stable domain/entity concepts instead.
+
+Recommended identity fields:
+
+- `domain`: `item`, `quest`, `map`, `boss`, `hideout`, `trader`, `information`, `story`
+- `entity_id`: primary entity id from `platform_db.sql`
+- `chunk_id`: stable id for the generated chunk
+- `chunk_type`: purpose of the chunk
+- `lang`: `ko`, `en`, or `ja`
+- `content`: text embedded and/or supplied to the LLM
+- `metadata`: structured answer/source metadata
+
+Recommended metadata baseline:
+
+- `domain`
+- `entity_id`
+- `entity_name`
+- `lang`
+- `section`
+- `url`
+- `image`
+- `schema_version`
+- `updated_at`
+
+Domain-specific metadata may be added when needed, but common fields should stay consistent.
+
+---
+
+## Chunking Rules
+
+The old `identifier -> content` retrieval pattern had poor recall when `identifier` contained only names or categories.
+Do not use sparse identifier-only chunks as the sole first-stage search target.
+
+Use separate chunk purposes:
+
+- `identifier`: exact name, aliases, normalized name, category, short labels
+- `retrieval`: rich candidate-search summary containing names, aliases, goals, maps, rewards, requirements, uses, relations, and important keywords
+- `content`: answer-ready detail sections
+- `relation`: structured relationship text such as quest requirements, item usage, crafts, barter, boss spawns, map points
+- `guide`: long guide or explanation text
+
+First-stage search should include `retrieval` and may include `identifier`, `summary`, or selected `content` chunks.
+Do not restrict first-stage search to `chunk_type = 'identifier'`.
+
+Prefer an explicit searchable flag or an allowlist such as:
+
+```sql
+chunk_type IN ('identifier', 'retrieval', 'summary')
+```
+
+Then expand by `domain + entity_id` to fetch answer-ready chunks.
+
+---
+
+## Retrieval Rules
+
+Use hybrid retrieval where possible:
+
+- vector search for semantic matching
+- PostgreSQL `tsvector` full-text search instead of BM25
+- PostgreSQL `pg_trgm` trigram search for exact/partial names and typo-tolerant matching
+- reciprocal rank fusion or another clear rank merge strategy
+
+Do not introduce BM25 as the default lexical retrieval layer.
+The intended lexical stack is `tsvector` + `pg_trgm`.
+
+Do not add a reranker by default.
+No reranker is currently applied in the local RAG pipeline; keep ranking based on vector, `tsvector`, `pg_trgm`, and fusion unless the user explicitly asks to add reranking.
+
+Rank and deduplicate by stable entity identity:
+
+- use `domain + entity_id`
+- avoid relying on legacy `source_table + ref_id`
+
+After candidate selection, fetch relevant answer chunks for those entities instead of stuffing every stored chunk blindly.
+
+For long entities, prefer section-aware selection:
+
+- specs for stat questions
+- objectives/rewards for quest questions
+- guide chunks for how-to questions
+- relation chunks for usage, requirements, crafts, unlocks, spawns, and dependencies
+
+---
+
+## Web Fallback Rules
+
+For game-related questions, the local RAG database should be the first source of truth.
+Use internet search only as a fallback when the local RAG result is missing, empty, clearly below confidence thresholds, or does not contain the specific fact needed to answer the user.
+
+Allowed fallback cases:
+
+- No relevant local RAG documents are found.
+- Retrieved documents are unrelated to the user's game question.
+- The user asks about a newly changed game detail that may not exist in the local database yet.
+- The local documents mention an entity but lack the requested field, location, value, patch detail, or guide information.
+- The user explicitly asks to search the internet.
+
+When using internet search:
+
+- Prefer authoritative or high-signal sources such as the official Escape from Tarkov site, patch notes, official social channels, and well-maintained community wikis.
+- Cross-check volatile gameplay data when possible, especially prices, spawn rates, quest changes, event details, and patch-specific behavior.
+- Clearly separate local RAG information from web-sourced information in the final answer.
+- Include source URLs used for web fallback.
+- Do not silently merge uncertain web information into the answer as if it came from the local RAG database.
+- Do not update local RAG data from web results unless the user explicitly asks for ingestion or rebuild work.
+
+Recommended answer behavior:
+
+- If local RAG has an answer, answer from local RAG first.
+- If local RAG is empty and web search succeeds, state that the local database did not contain the information and answer using web sources.
+- If both local RAG and web results are insufficient, say so clearly instead of guessing.
+
+---
+
+## V3 Schema Mapping Notes
+
+The normalized schema splits old JSON-heavy data into relational tables.
+Always join through the tables defined in `platform_db.sql`.
+
+Important domains include:
+
+- Items: `items`, `item_details`, `item_prices`, `item_trader_prices`, `weapon_items`, `ammo_items`, `protection_items`, `consumable_items`, and related item subtype tables
+- Quests: `quests`, `quest_objectives`, `quest_objective_items`, `quest_objective_maps`, `quest_relations`, and quest reward tables
+- Maps: `maps`, `map_points`, `live_map_points`, `live_map_point_details`, `live_map_static_points`
+- Bosses: `bosses`, `boss_spawn`, `boss_item`
+- Hideout: `hideout_master`, `hideout_levels`, `hideout_item_require`, `hideout_crafts`, and related requirement/bonus tables
+- Traders and barters: `traders`, `trader_barters`, `barter_required_items`, `barter_reward_items`
+- Information/news/story: `information`, `news_items`, `story`, `story_roadmap`
+
+If a relationship is unclear, inspect the schema and existing backend V3 code before implementing.
+Do not guess missing joins.
+
+### Item Relationship Direction
+
+Many user questions are relationship-direction questions, not simple entity lookup questions.
+For item-related RAG builders and retrieval metadata, generate both forward and reverse relation chunks where useful.
+
+Examples:
+
+- "What can I get from this item?"
+- "What can I craft with this item?"
+- "What barter uses this item?"
+- "Where do I get this item?"
+- "Which quest rewards this item?"
+- "Which quest needs this item?"
+- "Which hideout upgrade needs this item?"
+
+Use the normalized relation tables with explicit direction:
+
+- Craft input -> craft output:
+  - `hideout_craft_require_items.item_id`
+  - join `hideout_crafts.id = hideout_craft_require_items.craft_id`
+  - output item is `hideout_crafts.reward_item_id`
+
+- Craft output -> required input items:
+  - `hideout_crafts.reward_item_id`
+  - join `hideout_craft_require_items.craft_id = hideout_crafts.id`
+  - input items are `hideout_craft_require_items.item_id`
+
+- Barter input -> barter reward:
+  - `barter_required_items.item_id`
+  - join `trader_barters.id = barter_required_items.barter_id`
+  - join `barter_reward_items.barter_id = trader_barters.id`
+  - reward items are `barter_reward_items.item_id`
+
+- Barter reward -> required barter input:
+  - `barter_reward_items.item_id`
+  - join `trader_barters.id = barter_reward_items.barter_id`
+  - join `barter_required_items.barter_id = trader_barters.id`
+  - required items are `barter_required_items.item_id`
+
+- Item required by quest objective:
+  - `quest_objective_items.item_id`
+  - join `quest_objectives.objective_id = quest_objective_items.objective_id`
+  - join `quests.id = quest_objectives.quest_id`
+
+- Item rewarded by quest:
+  - `quest_finish_reward_items.item_id`
+  - join `quests.id = quest_finish_reward_items.quest_id`
+
+- Item unlocks after quest completion:
+  - `quest_finish_reward_offer_unlock.item_id`
+  - join `quests.id = quest_finish_reward_offer_unlock.quest_id`
+
+- Craft unlocks after quest completion:
+  - `quest_finish_reward_craft_unlocks.craft_id`
+  - join `hideout_crafts.id = quest_finish_reward_craft_unlocks.craft_id`
+  - output item is `hideout_crafts.reward_item_id`
+
+- Item required by hideout upgrade:
+  - `hideout_item_require.item_id`
+  - join `hideout_levels.id = hideout_item_require.hideout_level_id`
+  - join `hideout_master.id = hideout_levels.master_id`
+
+- Boss drops item:
+  - `boss_item.item_id`
+  - join `bosses.id = boss_item.boss_id`
+
+- Weapon can use ammo:
+  - weapon -> ammo: `weapon_allowed_ammo.item_id` -> `weapon_allowed_ammo.ammo_item_id`
+  - ammo -> compatible weapons: `weapon_allowed_ammo.ammo_item_id` -> `weapon_allowed_ammo.item_id`
+
+For each item entity, relation chunks should summarize:
+
+- items obtainable by using this item in crafts
+- items obtainable by using this item in barters
+- crafts that produce this item
+- barters that reward this item
+- quests requiring this item
+- quests rewarding or unlocking this item
+- hideout upgrades requiring this item
+- bosses that can drop this item
+- compatible weapons/ammo when applicable
+
+Do not answer relationship questions from the `items` table alone.
+The `items` table only identifies the item; the answer usually comes from relation tables.
+
+---
+
+## Builder Architecture
+
+Prefer separating RAG generation into small layers:
+
+1. Load normalized rows from `platform_db.sql` tables.
+2. Map rows into domain entities.
+3. Build `RagChunk` objects.
+4. Embed chunks.
+5. Upsert chunks into the RAG table.
+
+Avoid mixing SQL loading, text formatting, embedding, and upsert logic in every domain file.
+
+Recommended structure:
+
+```text
+rag_builders_v3/
+  base.py
+  item.py
+  quest.py
+  map.py
+  boss.py
+  hideout.py
+```
+
+Shared logic such as language fallback, JSON parsing, embedding calls, batching, and upsert should live in common modules.
+
+---
+
+## Language Rules
+
+Supported languages are `ko`, `en`, and `ja`.
+
+When generating chunks:
+
+- Use language-specific fields such as `name_ko`, `name_en`, `name_ja`.
+- Keep each chunk language-specific.
+- Add English names or normalized names to retrieval chunks when they help search aliases.
+- Do not merge multiple answer languages into one LLM context chunk.
+
+---
+
+## Completion Criteria
+
+A V3 RAG change is not complete until:
+
+1. Queries are verified against `platform_db.sql`.
+2. Chunk text includes rich retrieval summaries, not identifier-only search text.
+3. Metadata includes stable domain/entity/source fields.
+4. Retrieval is tested with natural user queries, not only exact names.
+5. Legacy and V3 behavior can be compared before switching production usage.
+
+---
+
+## Source Display Rules
+
+Every generated answer should keep source metadata internally.
+
+When useful, answers may expose:
+
+- entity name
+- domain
+- source URL
+- updated_at
+- local RAG or web fallback origin
+
+Do not expose raw chunk ids to end users unless debugging.
+
+---
+
+## Configuration Rules
+
+Do not hard-code retrieval parameters.
+
+Keep these configurable:
+
+- vector top_k
+- lexical top_k
+- trigram threshold
+- final entity limit
+- answer chunk limit
+- similarity threshold
+- RRF constant
+- max context characters
+
+---
+
+## Evaluation Rules
+
+Prepare a small fixed evaluation set before replacing legacy RAG.
+
+The evaluation set should include:
+
+- exact item name queries
+- Korean natural-language item queries
+- quest requirement questions
+- quest reward questions
+- barter/craft relation questions
+- map/location questions
+- boss spawn/drop questions
+- unknown or insufficient-context questions
+
+A V3 RAG result should be checked for:
+
+- correct entity retrieval
+- correct relation direction
+- no unsupported facts
+- correct answer language
+- source metadata included
+
+---
+
+## Retrieval Confidence Rules
+
+Treat local retrieval as low-confidence when:
+
+- top results are from unrelated domains
+- top score is below the configured threshold
+- vector, full-text, and trigram results disagree completely
+- selected entities do not match the user's requested domain
+- answer chunks lack the field or relation needed by the question
+
+Low-confidence results must not be forced into an answer.
+
+## Ingestion / Rebuild Rules
+
+Scheduled data refresh and rebuild orchestration are handled outside this repository, currently by Airflow.
+Do not implement a separate scheduler or orchestration layer in the agent repository unless explicitly requested.
+
+When rebuilding a domain:
+
+- upsert current chunks
+- remove, deactivate, or clearly replace stale chunks
+- log rebuild start/end and failures
+- do not leave stale chunks searchable after rebuild
+
+A dedicated ingestion run table may be added if rebuild observability becomes necessary.

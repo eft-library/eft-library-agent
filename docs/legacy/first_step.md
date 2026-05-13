@@ -34,6 +34,8 @@ sudo mkdir -p /etc/systemd/system/ollama.service.d
 sudo vi /etc/systemd/system/ollama.service.d/override.conf
 [Service]
 Environment="OLLAMA_HOST=0.0.0.0:999999"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_GPU_OVERHEAD=0"
 
 # 환경 수정
 echo 'export OLLAMA_HOST=http://localhost:999999' >> ~/.bashrc
