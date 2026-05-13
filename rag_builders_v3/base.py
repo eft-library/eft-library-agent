@@ -17,9 +17,9 @@ SUPPORTED_LANGS: tuple[Lang, ...] = ("ko", "en", "ja")
 def lang_value(row: dict, base_name: str, lang: Lang, fallback: Lang = "en") -> str:
     value = row.get(f"{base_name}_{lang}")
     if value:
-        return str(value)
+        return str(value).strip()
     fallback_value = row.get(f"{base_name}_{fallback}")
-    return str(fallback_value or "")
+    return str(fallback_value or "").strip()
 
 
 def clean_parts(parts: Iterable[str | None]) -> str:

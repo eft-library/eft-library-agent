@@ -1,11 +1,17 @@
 import json
 import logging
 import os
+import argparse
+import asyncio
 from collections.abc import Iterable
+from dotenv import load_dotenv
 
 from db.connection import get_pool
+from db.connection import close_pool
 from schemas.models_v3 import Domain, Lang, RagDocumentV3
 from tools.embedder import get_embedding
+
+load_dotenv()
 
 log = logging.getLogger(__name__)
 
@@ -14,7 +20,7 @@ TRGM_THRESHOLD = float(os.getenv("RAG_TRGM_THRESHOLD", "0.08"))
 RRF_K = int(os.getenv("RAG_RRF_K", "60"))
 ANSWER_CHUNK_LIMIT = int(os.getenv("RAG_ANSWER_CHUNK_LIMIT", "12"))
 
-SEARCHABLE_CHUNK_TYPES = ("identifier", "retrieval", "summary")
+SEARCHABLE_CHUNK_TYPES = ("identifier", "retrieval", "summary", "relation")
 ANSWER_CHUNK_TYPES = ("content", "relation", "guide", "summary", "retrieval")
 
 
@@ -28,9 +34,27 @@ def _reciprocal_rank_fusion(
 ) -> dict[tuple[str, str], float]:
     scores: dict[tuple[str, str], float] = {}
     for rows in ranked_lists:
-        for rank, row in enumerate(rows):
+        deduped_rows = []
+        seen = set()
+        for row in rows:
+            key = _entity_key(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped_rows.append(row)
+
+        for rank, row in enumerate(deduped_rows):
             key = _entity_key(row)
             scores[key] = scores.get(key, 0.0) + 1 / (k + rank + 1)
+    return scores
+
+
+def _max_score_by_entity(rows: list) -> dict[tuple[str, str], float]:
+    scores: dict[tuple[str, str], float] = {}
+    for row in rows:
+        key = _entity_key(row)
+        score = round(float(row["score"]), 4)
+        scores[key] = max(scores.get(key, 0.0), score)
     return scores
 
 
@@ -46,11 +70,35 @@ async def search_rag_v3(
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        params = [embedding_str, query, lang, list(SEARCHABLE_CHUNK_TYPES), candidate_limit]
-        domain_clause = ""
+        vector_params = [
+            embedding_str,
+            lang,
+            list(SEARCHABLE_CHUNK_TYPES),
+            candidate_limit,
+        ]
+        lexical_params = [
+            query,
+            lang,
+            list(SEARCHABLE_CHUNK_TYPES),
+            candidate_limit,
+        ]
+        trigram_params = [
+            query,
+            lang,
+            list(SEARCHABLE_CHUNK_TYPES),
+            candidate_limit,
+            TRGM_THRESHOLD,
+        ]
+        vector_domain_clause = ""
+        lexical_domain_clause = ""
+        trigram_domain_clause = ""
         if domain:
-            domain_clause = "AND domain = $6"
-            params.append(domain)
+            vector_domain_clause = "AND domain = $5"
+            lexical_domain_clause = "AND domain = $5"
+            trigram_domain_clause = "AND domain = $6"
+            vector_params.append(domain)
+            lexical_params.append(domain)
+            trigram_params.append(domain)
 
         vector_rows = await conn.fetch(
             f"""
@@ -58,51 +106,51 @@ async def search_rag_v3(
                 domain, entity_id, chunk_id, chunk_type,
                 1 - (embedding <=> $1::vector) AS score
             FROM rag_documents_v3
-            WHERE lang = $3
+            WHERE lang = $2
               AND is_active
               AND searchable
-              AND chunk_type = ANY($4::text[])
-              {domain_clause}
+              AND chunk_type = ANY($3::text[])
+              {vector_domain_clause}
             ORDER BY embedding <=> $1::vector
-            LIMIT $5
+            LIMIT $4
             """,
-            *params,
+            *vector_params,
         )
 
         lexical_rows = await conn.fetch(
             f"""
             SELECT
                 domain, entity_id, chunk_id, chunk_type,
-                ts_rank_cd(search_vector, plainto_tsquery('simple', $2)) AS score
+                ts_rank_cd(search_vector, plainto_tsquery('simple', $1)) AS score
             FROM rag_documents_v3
-            WHERE lang = $3
+            WHERE lang = $2
               AND is_active
               AND searchable
-              AND chunk_type = ANY($4::text[])
-              AND search_vector @@ plainto_tsquery('simple', $2)
-              {domain_clause}
+              AND chunk_type = ANY($3::text[])
+              AND search_vector @@ plainto_tsquery('simple', $1)
+              {lexical_domain_clause}
             ORDER BY score DESC
-            LIMIT $5
+            LIMIT $4
             """,
-            *params,
+            *lexical_params,
         )
 
         trigram_rows = await conn.fetch(
             f"""
             SELECT
                 domain, entity_id, chunk_id, chunk_type,
-                similarity(content, $2) AS score
+                similarity(content, $1) AS score
             FROM rag_documents_v3
-            WHERE lang = $3
+            WHERE lang = $2
               AND is_active
               AND searchable
-              AND chunk_type = ANY($4::text[])
-              AND similarity(content, $2) > {TRGM_THRESHOLD}
-              {domain_clause}
+              AND chunk_type = ANY($3::text[])
+              AND similarity(content, $1) > $5
+              {trigram_domain_clause}
             ORDER BY score DESC
-            LIMIT $5
+            LIMIT $4
             """,
-            *params,
+            *trigram_params,
         )
 
         rrf_scores = _reciprocal_rank_fusion(
@@ -114,15 +162,9 @@ async def search_rag_v3(
             log.info("[retriever_v3] no candidates query=%s", query[:40])
             return []
 
-        vector_score_map = {
-            _entity_key(row): round(float(row["score"]), 4) for row in vector_rows
-        }
-        lexical_score_map = {
-            _entity_key(row): round(float(row["score"]), 4) for row in lexical_rows
-        }
-        trigram_score_map = {
-            _entity_key(row): round(float(row["score"]), 4) for row in trigram_rows
-        }
+        vector_score_map = _max_score_by_entity(list(vector_rows))
+        lexical_score_map = _max_score_by_entity(list(lexical_rows))
+        trigram_score_map = _max_score_by_entity(list(trigram_rows))
 
         filtered_keys = [
             key
@@ -210,3 +252,38 @@ async def search_rag_v3(
         len(results),
     )
     return results
+
+
+async def _main() -> None:
+    parser = argparse.ArgumentParser(description="Search V3 RAG documents.")
+    parser.add_argument("query")
+    parser.add_argument("--lang", default="ko", choices=["ko", "en", "ja"])
+    parser.add_argument("--domain", choices=["item", "quest", "map", "boss", "hideout", "trader", "information", "story"])
+    parser.add_argument("--limit", type=int, default=int(os.getenv("RAG_LIMIT", "10")))
+    args = parser.parse_args()
+
+    try:
+        docs = await search_rag_v3(
+            query=args.query,
+            lang=args.lang,
+            limit=args.limit,
+            domain=args.domain,
+        )
+        for i, doc in enumerate(docs, 1):
+            name = doc.metadata.get("entity_name", "")
+            print(
+                f"\n[{i}] {doc.domain}/{doc.entity_id} "
+                f"{doc.chunk_type}:{doc.chunk_id} "
+                f"vector={doc.similarity} lexical={doc.lexical_score} "
+                f"trgm={doc.trigram_score} fused={doc.fused_score}"
+            )
+            if name:
+                print(f"name: {name}")
+            print(doc.content[:1200])
+    finally:
+        await close_pool()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    asyncio.run(_main())
