@@ -6,6 +6,7 @@ from schemas.models_v3 import ChatMessageV3, Domain, Lang, RagDocumentV3
 from tools.history_v3 import get_history_v3, save_message_v3
 from tools.llm_v3 import chat_llm_stream_v3
 from tools.retriever_v3 import search_rag_v3
+from tools.web_fallback_v3 import WebFallbackResult, search_web_fallback_v3
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +77,45 @@ def source_docs_v3(docs: list[RagDocumentV3]) -> list[dict]:
     return sources
 
 
+def build_web_context_v3(results: list[WebFallbackResult]) -> str:
+    if not results:
+        return ""
+
+    parts = [
+        "[웹 fallback 참고 문서]",
+        "로컬 RAG에서 충분한 문서를 찾지 못해 웹 검색 결과를 참고합니다.",
+        "커뮤니티 사이트 결과는 패치 버전, 작성 시점, 작성자 경험에 따라 부정확할 수 있습니다.",
+    ]
+    for i, result in enumerate(results, 1):
+        community = "yes" if result.is_community else "no"
+        parts.append(
+            "\n".join(
+                [
+                    f"[웹 문서 {i}]",
+                    f"title: {result.title}",
+                    f"url: {result.url}",
+                    f"source: {result.source}",
+                    f"community: {community}",
+                    result.snippet,
+                ]
+            )
+        )
+    return "\n\n".join(parts)
+
+
+def source_web_docs_v3(results: list[WebFallbackResult]) -> list[dict]:
+    return [
+        {
+            "origin": "web",
+            "title": result.title,
+            "url": result.url,
+            "source": result.source,
+            "is_community": result.is_community,
+        }
+        for result in results
+    ]
+
+
 async def run_rag_pipeline_stream_v3(
     session_id: str,
     user_query: str,
@@ -105,6 +145,10 @@ async def run_rag_pipeline_stream_v3(
         )
         sources = source_docs_v3(docs)
         context = build_context_v3(docs)
+        if not docs:
+            web_results = await search_web_fallback_v3(user_query)
+            sources = source_web_docs_v3(web_results)
+            context = build_web_context_v3(web_results)
 
         yield f"data: {json.dumps({'type': 'docs', 'docs': sources}, ensure_ascii=False)}\n\n"
 

@@ -22,6 +22,11 @@ python -m venv venv
 - `RAG_TRGM_THRESHOLD`
 - `RAG_RRF_K`
 - `RAG_V3_MAX_CONTEXT_CHARS`
+- `WEB_FALLBACK_ENABLED`
+- `WEB_SEARCH_PROVIDER`
+- `WEB_SEARCH_API_KEY`
+- `WEB_FALLBACK_DOMAINS`
+- `WEB_SEARCH_LIMIT`
 
 ## V3 Storage
 
@@ -116,6 +121,26 @@ V3 검색은 `tools/retriever_v3.py`를 사용합니다.
 ./venv/bin/python -m tools.retriever_v3 "Smugglers 2026 어디 나와" --domain information --limit 3
 ```
 
+## V3 Evaluation
+
+대표 질문 세트로 retrieval 품질을 빠르게 확인합니다.
+
+```bash
+./venv/bin/python -m tools.eval_v3
+```
+
+실제 LLM 답변 생성까지 포함해서 확인할 때:
+
+```bash
+./venv/bin/python -m tools.eval_v3 --with-answer
+```
+
+특정 케이스만 실행:
+
+```bash
+./venv/bin/python -m tools.eval_v3 --case item_craft_salewa
+```
+
 ## V3 Answer Pipeline
 
 V3 답변 생성 경로:
@@ -173,6 +198,51 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
 
 If backend logs show `incomplete chunked read`, the agent stream closed before sending a complete SSE response.
 Both backend and agent stream layers should emit an SSE `error` event followed by `done` so FastAPI does not raise a traceback to the client.
+
+## Web Fallback
+
+Game-related questions should use local V3 RAG first.
+If local RAG returns no documents or clearly lacks the requested fact, web fallback can be added as a second stage.
+
+Recommended approach:
+
+- keep local RAG answer as the primary source
+- call web search only on low-confidence or empty local results
+- restrict web search to approved domains such as official Tarkov pages, Tarkov.dev, or the EFT Wiki
+- return web-sourced answers with source URLs
+- do not ingest web results into RAG tables unless explicitly requested
+
+Default allowed domains:
+
+- `gall.dcinside.com/mgallery/board`
+- `tarkov.dev`
+- `escapefromtarkov.fandom.com`
+
+DCInside is a Korean community source and should be treated as lower-confidence reference.
+Tarkov.dev and Fandom are useful for structured or cross-check information, but are mostly English.
+
+Implementation options:
+
+- a search API key/provider such as Tavily, Brave Search, SerpAPI, or Google Custom Search
+- or a site-specific API/search endpoint if the target site provides one
+- or `WEB_SEARCH_PROVIDER=public` for best-effort direct lookup against public community pages
+
+Avoid brittle HTML scraping as the default production path.
+
+Example `.env`:
+
+```dotenv
+WEB_FALLBACK_ENABLED=true
+WEB_SEARCH_PROVIDER=public
+WEB_SEARCH_LIMIT=5
+WEB_FALLBACK_DOMAINS=gall.dcinside.com/mgallery/board,tarkov.dev,escapefromtarkov.fandom.com
+```
+
+`public` provider does not require an API key, but it is best-effort:
+
+- DCInside currently returns public HTML and can be parsed.
+- ArcaLive is intentionally excluded because server-side requests are commonly blocked by Cloudflare challenge.
+- Layout changes or anti-bot rules can break direct parsing.
 
 ## Run Server
 
