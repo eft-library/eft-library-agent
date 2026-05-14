@@ -165,6 +165,12 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
   }'
 ```
 
+주의:
+
+- `domain`은 생략하거나 `item`, `quest`, `map`, `boss`, `hideout`, `trader`, `information`, `story` 중 하나만 보냅니다.
+- Swagger 기본 예시값인 `"string"`을 그대로 보내면 안 됩니다.
+- `rag_limit`, `history_limit`는 생략하거나 1 이상의 값을 보냅니다. `0`은 기본값 사용으로 처리합니다.
+
 If backend logs show `incomplete chunked read`, the agent stream closed before sending a complete SSE response.
 Both backend and agent stream layers should emit an SSE `error` event followed by `done` so FastAPI does not raise a traceback to the client.
 

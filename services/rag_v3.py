@@ -87,6 +87,13 @@ async def run_rag_pipeline_stream_v3(
     full_answer = ""
     sources: list[dict] = []
     try:
+        if domain in ("", "string"):
+            domain = None
+        if rag_limit <= 0:
+            rag_limit = int(os.getenv("RAG_LIMIT", "3"))
+        if history_limit <= 0:
+            history_limit = int(os.getenv("RAG_LIMIT", "3"))
+
         history = await get_history_v3(session_id, limit=history_limit)
         await save_message_v3(session_id, "user", user_query, lang)
 
