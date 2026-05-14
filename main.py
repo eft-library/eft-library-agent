@@ -49,6 +49,7 @@ log = logging.getLogger(__name__)
 
 MCP_HOST = os.getenv("MCP_HOST")
 MCP_PORT = int(os.getenv("MCP_PORT"))
+APP_VERSION = "v3-2026-05-15-retriever-or-prefix"
 
 
 # Lifespan - DB 풀 초기화
@@ -68,13 +69,19 @@ mcp = FastMCP("eft-library-rag", lifespan=lifespan)
 
 
 @mcp.custom_route("/health", methods=["GET"])
-async def health(request: Request) -> JSONResponse:
+async def health(*args, **kwargs) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
 @mcp.custom_route("/api/rag/v3/health", methods=["GET"])
-async def rag_v3_health(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok", "version": "v3"})
+async def rag_v3_health(*args, **kwargs) -> JSONResponse:
+    return JSONResponse(
+        {
+            "status": "ok",
+            "version": "v3",
+            "app_version": APP_VERSION,
+        }
+    )
 
 
 @mcp.custom_route("/api/rag/chat/stream", methods=["POST"])
