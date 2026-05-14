@@ -68,12 +68,12 @@ mcp = FastMCP("eft-library-rag", lifespan=lifespan)
 
 
 @mcp.custom_route("/health", methods=["GET"])
-async def health() -> JSONResponse:
+async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
 @mcp.custom_route("/api/rag/v3/health", methods=["GET"])
-async def rag_v3_health() -> JSONResponse:
+async def rag_v3_health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "version": "v3"})
 
 
