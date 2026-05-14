@@ -219,6 +219,7 @@ Allowed fallback cases:
 When using internet search:
 
 - Prefer authoritative or high-signal sources such as the official Escape from Tarkov site, patch notes, official social channels, and well-maintained community wikis.
+- For Steam purchase or real-money price questions, prefer the public Steam Store appdetails API before community search.
 - Cross-check volatile gameplay data when possible, especially prices, spawn rates, quest changes, event details, and patch-specific behavior.
 - Clearly separate local RAG information from web-sourced information in the final answer.
 - Include source URLs used for web fallback.
@@ -228,6 +229,8 @@ When using internet search:
 Recommended answer behavior:
 
 - If local RAG has an answer, answer from local RAG first.
+- Before answering, verify that retrieved local documents are answerable for the specific user question, not just keyword-related.
+- If local documents are broad keyword noise or lack the requested fact, use web fallback or say that the information is unavailable.
 - If local RAG is empty and web search succeeds, state that the local database did not contain the information and answer using web sources.
 - If both local RAG and web results are insufficient, say so clearly instead of guessing.
 

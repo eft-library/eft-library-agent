@@ -3,6 +3,7 @@ import logging
 import os
 
 from schemas.models_v3 import ChatMessageV3, Domain, Lang, RagDocumentV3
+from tools.answerability_v3 import assess_answerability_v3
 from tools.history_v3 import get_history_v3, save_message_v3
 from tools.llm_v3 import chat_llm_stream_v3
 from tools.retriever_v3 import search_rag_v3
@@ -11,6 +12,9 @@ from tools.web_fallback_v3 import WebFallbackResult, search_web_fallback_v3
 log = logging.getLogger(__name__)
 
 MAX_CONTEXT_CHARS = int(os.getenv("RAG_V3_MAX_CONTEXT_CHARS", "18000"))
+ANSWERABILITY_CHECK_ENABLED = (
+    os.getenv("RAG_V3_ANSWERABILITY_CHECK", "true").lower() == "true"
+)
 
 
 def build_context_v3(
@@ -116,6 +120,24 @@ def source_web_docs_v3(results: list[WebFallbackResult]) -> list[dict]:
     ]
 
 
+async def should_use_web_fallback_v3(
+    query: str,
+    docs: list[RagDocumentV3],
+    context: str,
+    lang: Lang,
+) -> tuple[bool, str]:
+    if not docs:
+        return True, "no_local_docs"
+
+    if not ANSWERABILITY_CHECK_ENABLED:
+        return False, "answerability_check_disabled"
+
+    result = await assess_answerability_v3(query=query, context=context, lang=lang)
+    if not result.answerable:
+        return True, f"not_answerable:{result.reason}"
+    return False, f"answerable:{result.reason}"
+
+
 async def run_rag_pipeline_stream_v3(
     session_id: str,
     user_query: str,
@@ -145,10 +167,25 @@ async def run_rag_pipeline_stream_v3(
         )
         sources = source_docs_v3(docs)
         context = build_context_v3(docs)
-        if not docs:
+        use_web, fallback_reason = await should_use_web_fallback_v3(
+            query=user_query,
+            docs=docs,
+            context=context,
+            lang=lang,
+        )
+        log.info(
+            "[rag_pipeline_v3] fallback_check use_web=%s reason=%s",
+            use_web,
+            fallback_reason,
+        )
+        if use_web:
             web_results = await search_web_fallback_v3(user_query)
-            sources = source_web_docs_v3(web_results)
-            context = build_web_context_v3(web_results)
+            if web_results:
+                sources = source_web_docs_v3(web_results)
+                context = build_web_context_v3(web_results)
+            else:
+                sources = []
+                context = ""
 
         yield f"data: {json.dumps({'type': 'docs', 'docs': sources}, ensure_ascii=False)}\n\n"
 

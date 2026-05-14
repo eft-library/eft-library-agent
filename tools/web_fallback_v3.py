@@ -15,8 +15,12 @@ WEB_FALLBACK_ENABLED = os.getenv("WEB_FALLBACK_ENABLED", "false").lower() == "tr
 WEB_SEARCH_PROVIDER = os.getenv("WEB_SEARCH_PROVIDER", "").lower()
 WEB_SEARCH_API_KEY = os.getenv("WEB_SEARCH_API_KEY", "")
 WEB_SEARCH_LIMIT = int(os.getenv("WEB_SEARCH_LIMIT", "5"))
+WEB_FALLBACK_STEAM_APP_ID = os.getenv("WEB_FALLBACK_STEAM_APP_ID", "3932890")
+WEB_FALLBACK_STEAM_COUNTRY = os.getenv("WEB_FALLBACK_STEAM_COUNTRY", "KR")
+WEB_FALLBACK_STEAM_LANG = os.getenv("WEB_FALLBACK_STEAM_LANG", "korean")
 
 DEFAULT_FALLBACK_DOMAINS = [
+    "store.steampowered.com/app/3932890",
     "gall.dcinside.com/mgallery/board",
     "tarkov.dev",
     "escapefromtarkov.fandom.com",
@@ -32,6 +36,22 @@ WEB_FALLBACK_DOMAINS = [
 ]
 
 COMMUNITY_DOMAINS = ("gall.dcinside.com",)
+STEAM_STORE_KEYWORDS = (
+    "steam",
+    "스팀",
+    "구매",
+    "살수",
+    "살 수",
+    "가격",
+    "얼마",
+    "할인",
+)
+TARKOV_KEYWORDS = (
+    "tarkov",
+    "타르코프",
+    "eft",
+    "이스케이프 프롬 타르코프",
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +90,12 @@ async def search_web_fallback_v3(
         return []
 
     domains = domains or WEB_FALLBACK_DOMAINS
+    if _is_steam_store_query(query):
+        steam_domains = [*domains, DEFAULT_FALLBACK_DOMAINS[0]]
+        steam_result = await _fetch_steam_store_price(steam_domains)
+        if steam_result:
+            return [steam_result][:limit]
+
     if WEB_SEARCH_PROVIDER == "brave":
         return await _search_brave(query, domains, limit)
     if WEB_SEARCH_PROVIDER == "tavily":
@@ -79,6 +105,85 @@ async def search_web_fallback_v3(
 
     log.warning("[web_fallback_v3] unsupported provider=%s", WEB_SEARCH_PROVIDER)
     return []
+
+
+def _is_steam_store_query(query: str) -> bool:
+    normalized = query.lower().replace(" ", "")
+    has_store_intent = any(
+        keyword.replace(" ", "").lower() in normalized
+        for keyword in STEAM_STORE_KEYWORDS
+    )
+    has_tarkov = any(
+        keyword.replace(" ", "").lower() in normalized
+        for keyword in TARKOV_KEYWORDS
+    )
+    return has_store_intent and has_tarkov
+
+
+async def _fetch_steam_store_price(
+    domains: list[str],
+) -> WebFallbackResult | None:
+    steam_url = (
+        f"https://store.steampowered.com/app/{WEB_FALLBACK_STEAM_APP_ID}/"
+        "Escape_from_Tarkov/"
+    )
+    if not _allowed_url(steam_url, domains):
+        return None
+
+    params = {
+        "appids": WEB_FALLBACK_STEAM_APP_ID,
+        "cc": WEB_FALLBACK_STEAM_COUNTRY,
+        "l": WEB_FALLBACK_STEAM_LANG,
+        "filters": "price_overview,basic",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://store.steampowered.com/api/appdetails",
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("[web_fallback_v3] steam store lookup failed: %s", exc)
+        return None
+
+    app_data = data.get(WEB_FALLBACK_STEAM_APP_ID, {})
+    if not app_data.get("success"):
+        return None
+
+    details = app_data.get("data") or {}
+    price = details.get("price_overview") or {}
+    final_price = price.get("final_formatted")
+    if not final_price:
+        return None
+
+    discount = int(price.get("discount_percent") or 0)
+    initial_price = price.get("initial_formatted")
+    name = details.get("name") or "Escape from Tarkov"
+    discount_text = (
+        f" 현재 할인율은 {discount}%이며, 정상가는 {initial_price}입니다."
+        if discount and initial_price
+        else " 현재 Steam 할인은 적용되어 있지 않습니다."
+    )
+    snippet = (
+        f"Steam Store 공개 API 기준 {WEB_FALLBACK_STEAM_COUNTRY.upper()} 지역의 "
+        f"{name} 현재 가격은 {final_price}입니다.{discount_text}"
+    )
+    source, is_community = _source_from_url(steam_url)
+    log.info(
+        "[web_fallback_v3] steam store app=%s country=%s price=%s",
+        WEB_FALLBACK_STEAM_APP_ID,
+        WEB_FALLBACK_STEAM_COUNTRY,
+        final_price,
+    )
+    return WebFallbackResult(
+        title=f"{name} - Steam Store",
+        url=steam_url,
+        snippet=snippet,
+        source=source,
+        is_community=is_community,
+    )
 
 
 async def _search_public_sites(

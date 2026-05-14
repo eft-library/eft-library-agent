@@ -22,11 +22,16 @@ python -m venv venv
 - `RAG_TRGM_THRESHOLD`
 - `RAG_RRF_K`
 - `RAG_V3_MAX_CONTEXT_CHARS`
+- `RAG_V3_ANSWERABILITY_CHECK`
+- `RAG_V3_ANSWERABILITY_MAX_CONTEXT_CHARS`
 - `WEB_FALLBACK_ENABLED`
 - `WEB_SEARCH_PROVIDER`
 - `WEB_SEARCH_API_KEY`
 - `WEB_FALLBACK_DOMAINS`
 - `WEB_SEARCH_LIMIT`
+- `WEB_FALLBACK_STEAM_APP_ID`
+- `WEB_FALLBACK_STEAM_COUNTRY`
+- `WEB_FALLBACK_STEAM_LANG`
 
 ## V3 Storage
 
@@ -153,6 +158,10 @@ V3 답변 생성 경로:
   - `save_message_v3`
   - `get_history_v3`
 
+Before answer generation, `services/rag_v3.py` runs an answerability guard.
+This guard checks whether retrieved local documents actually contain enough information to answer the user question.
+If local results are broad keyword noise or lack the requested fact, the pipeline uses web fallback instead of answering from unrelated chunks.
+
 스트리밍 API 요청 예시:
 
 ```bash
@@ -203,6 +212,7 @@ Both backend and agent stream layers should emit an SSE `error` event followed b
 
 Game-related questions should use local V3 RAG first.
 If local RAG returns no documents or clearly lacks the requested fact, web fallback can be added as a second stage.
+External purchase, edition, discount, Steam, or real-money price questions should prefer web fallback even if local RAG returns weak item matches.
 
 Recommended approach:
 
@@ -214,6 +224,7 @@ Recommended approach:
 
 Default allowed domains:
 
+- `store.steampowered.com/app/3932890`
 - `gall.dcinside.com/mgallery/board`
 - `tarkov.dev`
 - `escapefromtarkov.fandom.com`
@@ -235,11 +246,17 @@ Example `.env`:
 WEB_FALLBACK_ENABLED=true
 WEB_SEARCH_PROVIDER=public
 WEB_SEARCH_LIMIT=5
-WEB_FALLBACK_DOMAINS=gall.dcinside.com/mgallery/board,tarkov.dev,escapefromtarkov.fandom.com
+RAG_V3_ANSWERABILITY_CHECK=true
+RAG_V3_ANSWERABILITY_MAX_CONTEXT_CHARS=6000
+WEB_FALLBACK_DOMAINS=store.steampowered.com/app/3932890,gall.dcinside.com/mgallery/board,tarkov.dev,escapefromtarkov.fandom.com
+WEB_FALLBACK_STEAM_APP_ID=3932890
+WEB_FALLBACK_STEAM_COUNTRY=KR
+WEB_FALLBACK_STEAM_LANG=korean
 ```
 
 `public` provider does not require an API key, but it is best-effort:
 
+- Steam purchase/price questions use the public Steam Store appdetails API first.
 - DCInside currently returns public HTML and can be parsed.
 - ArcaLive is intentionally excluded because server-side requests are commonly blocked by Cloudflare challenge.
 - Layout changes or anti-bot rules can break direct parsing.
