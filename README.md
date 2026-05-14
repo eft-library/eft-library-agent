@@ -143,6 +143,28 @@ curl -N -X POST http://localhost:15000/api/rag/v3/chat/stream \
   }'
 ```
 
+Backend FastAPI 연동:
+
+- backend repo: `/Users/sun-yeob/Desktop/Work/my_git/eftLibrary/eft-library-back`
+- backend route: `POST /api/chat/stream`
+- backend service proxies to agent route: `POST /api/rag/v3/chat/stream`
+- required backend env: `MCP_SERVER_URL=http://<agent-host>:15000`
+
+Backend 요청 예시:
+
+```bash
+curl -N -X POST http://localhost:8000/api/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "00000000-0000-0000-0000-000000000001",
+    "query": "살레와 어디서 만들어?",
+    "lang": "ko",
+    "domain": "item",
+    "rag_limit": 3,
+    "history_limit": 3
+  }'
+```
+
 ## Run Server
 
 ```bash
