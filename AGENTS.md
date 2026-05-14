@@ -388,6 +388,25 @@ A V3 RAG change is not complete until:
 3. Metadata includes stable domain/entity/source fields.
 4. Retrieval is tested with natural user queries, not only exact names.
 5. Legacy and V3 behavior can be compared before switching production usage.
+6. README.md is updated with any new commands, tables, builders, routes, or operational notes introduced by the change.
+
+---
+
+## Documentation Rules
+
+Keep `README.md` current while implementing V3 work.
+
+When adding or changing any of the following, update `README.md` in the same task:
+
+- SQL files or agent-owned tables
+- RAG builders and build commands
+- alias generation or approval workflow
+- retriever, answer pipeline, API routes, or MCP tools
+- environment variables needed to run the workflow
+- verification commands and representative test queries
+
+Do not leave important workflow knowledge only in chat history.
+The README should be useful after the terminal scrollback is gone.
 
 ---
 

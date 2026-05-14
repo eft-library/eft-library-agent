@@ -3,6 +3,7 @@ import logging
 import os
 import argparse
 import asyncio
+import re
 from collections.abc import Iterable
 from dotenv import load_dotenv
 
@@ -22,6 +23,57 @@ ANSWER_CHUNK_LIMIT = int(os.getenv("RAG_ANSWER_CHUNK_LIMIT", "12"))
 
 SEARCHABLE_CHUNK_TYPES = ("identifier", "retrieval", "summary", "relation")
 ANSWER_CHUNK_TYPES = ("content", "relation", "guide", "summary", "retrieval")
+LEXICAL_OR_STOPWORDS = {
+    "아이템",
+    "템",
+    "퀘스트",
+    "보스",
+    "맵",
+    "지도",
+    "제작",
+    "만들",
+    "만드는",
+    "필요",
+    "필요한",
+    "요구",
+    "어디",
+    "어디서",
+    "어떻게",
+    "해",
+    "함",
+    "드랍",
+    "보상",
+    "item",
+    "items",
+    "quest",
+    "quests",
+    "boss",
+    "map",
+    "craft",
+    "crafts",
+    "needed",
+    "required",
+    "where",
+    "how",
+}
+
+
+def _lexical_or_query(query: str) -> str:
+    tokens = re.findall(r"[0-9A-Za-z가-힣ぁ-ゟァ-ヿ一-龯]+", query)
+    terms = []
+    for token in tokens:
+        token = token.strip()
+        if len(token) < 2:
+            continue
+        if token.lower() in LEXICAL_OR_STOPWORDS:
+            continue
+        terms.append(f"{token}:*")
+    if not terms:
+        for token in tokens:
+            token = token.strip()
+            if len(token) >= 2:
+                terms.append(f"{token}:*")
+    return " | ".join(dict.fromkeys(terms))
 
 
 def _entity_key(row) -> tuple[str, str]:
@@ -66,6 +118,7 @@ async def search_rag_v3(
 ) -> list[RagDocumentV3]:
     embedding = await get_embedding(query)
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
+    lexical_or_query = _lexical_or_query(query)
     candidate_limit = max(limit * 4, 20)
 
     pool = await get_pool()
@@ -81,6 +134,7 @@ async def search_rag_v3(
             lang,
             list(SEARCHABLE_CHUNK_TYPES),
             candidate_limit,
+            lexical_or_query,
         ]
         trigram_params = [
             query,
@@ -94,7 +148,7 @@ async def search_rag_v3(
         trigram_domain_clause = ""
         if domain:
             vector_domain_clause = "AND domain = $5"
-            lexical_domain_clause = "AND domain = $5"
+            lexical_domain_clause = "AND domain = $6"
             trigram_domain_clause = "AND domain = $6"
             vector_params.append(domain)
             lexical_params.append(domain)
@@ -121,13 +175,19 @@ async def search_rag_v3(
             f"""
             SELECT
                 domain, entity_id, chunk_id, chunk_type,
-                ts_rank_cd(search_vector, plainto_tsquery('simple', $1)) AS score
+                (
+                    ts_rank_cd(search_vector, plainto_tsquery('simple', $1))
+                    + ts_rank_cd(search_vector, to_tsquery('simple', $5))
+                ) AS score
             FROM rag_documents_v3
             WHERE lang = $2
               AND is_active
               AND searchable
               AND chunk_type = ANY($3::text[])
-              AND search_vector @@ plainto_tsquery('simple', $1)
+              AND (
+                  search_vector @@ plainto_tsquery('simple', $1)
+                  OR search_vector @@ to_tsquery('simple', $5)
+              )
               {lexical_domain_clause}
             ORDER BY score DESC
             LIMIT $4

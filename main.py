@@ -15,6 +15,10 @@ from db.connection import get_pool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from services.rag import run_rag_pipeline_stream
+from services.rag_v3 import run_rag_pipeline_stream_v3
+from tools.retriever_v3 import search_rag_v3 as _search_rag_v3
+from tools.history_v3 import save_message_v3 as _save_message_v3
+from tools.history_v3 import get_history_v3 as _get_history_v3
 from contextlib import asynccontextmanager
 import logging.handlers
 
@@ -89,6 +93,32 @@ async def rag_chat_stream(request: Request) -> StreamingResponse:
         return JSONResponse({"detail": str(e)}, status_code=500)
 
 
+@mcp.custom_route("/api/rag/v3/chat/stream", methods=["POST"])
+async def rag_chat_stream_v3(request: Request) -> StreamingResponse:
+    try:
+        body = await request.json()
+        return StreamingResponse(
+            run_rag_pipeline_stream_v3(
+                session_id=body["session_id"],
+                user_query=body["query"],
+                lang=body.get("lang", "ko"),
+                rag_limit=body.get("rag_limit", int(os.getenv("RAG_LIMIT"))),
+                history_limit=body.get("history_limit", int(os.getenv("RAG_LIMIT"))),
+                domain=body.get("domain"),
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except KeyError as e:
+        return JSONResponse({"detail": f"필수 파라미터 누락: {e}"}, status_code=422)
+    except Exception as e:
+        log.error(f"[rag_chat_stream_v3] error: {e}")
+        return JSONResponse({"detail": str(e)}, status_code=500)
+
+
 # Tool 1: search_rag
 @mcp.tool()
 async def search_rag(
@@ -104,6 +134,17 @@ async def search_rag(
     docs = await _search_rag(
         query=query, lang=lang, limit=limit, source_table=source_table
     )
+    return [d.model_dump() for d in docs]
+
+
+@mcp.tool()
+async def search_rag_v3(
+    query: str,
+    lang: str = "ko",
+    limit: int = int(os.getenv("RAG_LIMIT")),
+    domain: str | None = None,
+) -> list[dict]:
+    docs = await _search_rag_v3(query=query, lang=lang, limit=limit, domain=domain)
     return [d.model_dump() for d in docs]
 
 
@@ -148,6 +189,32 @@ async def get_history(
         limit:      가져올 최근 메시지 수 (기본 3)
     """
     messages = await _get_history(session_id=session_id, limit=limit)
+    return [m.model_dump() for m in messages]
+
+
+@mcp.tool()
+async def save_message_v3(
+    session_id: str,
+    role: str,
+    content: str,
+    lang: str = "ko",
+    source_docs: list[dict] | None = None,
+) -> dict:
+    return await _save_message_v3(
+        session_id=session_id,
+        role=role,
+        content=content,
+        lang=lang,
+        source_docs=source_docs,
+    )
+
+
+@mcp.tool()
+async def get_history_v3(
+    session_id: str,
+    limit: int = int(os.getenv("RAG_LIMIT")),
+) -> list[dict]:
+    messages = await _get_history_v3(session_id=session_id, limit=limit)
     return [m.model_dump() for m in messages]
 
 
