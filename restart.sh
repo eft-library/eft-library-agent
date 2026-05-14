@@ -13,6 +13,7 @@ LOG_FILE="$LOG_DIR/mcp-server.log"
 VENV="$SCRIPT_DIR/venv/bin/activate"
 PYTHON="$SCRIPT_DIR/venv/bin/python3"
 APP="$SCRIPT_DIR/main.py"
+ENV_FILE="$SCRIPT_DIR/.env"
 
 mkdir -p "$LOG_DIR"
 
@@ -30,6 +31,34 @@ is_running() {
         fi
     fi
     return 1  # 중지 상태
+}
+
+get_env_value() {
+    KEY="$1"
+    if [ -f "$ENV_FILE" ]; then
+        grep -E "^${KEY}=" "$ENV_FILE" | tail -n 1 | cut -d '=' -f 2-
+    fi
+}
+
+health_url() {
+    PORT=$(get_env_value "MCP_PORT")
+    if [ -z "$PORT" ]; then
+        PORT=15000
+    fi
+    echo "http://127.0.0.1:${PORT}/api/rag/v3/health"
+}
+
+is_v3_ready() {
+    if ! command -v curl >/dev/null 2>&1; then
+        return 0
+    fi
+
+    URL=$(health_url)
+    STATUS=$(curl -fsS --max-time 2 "$URL" 2>/dev/null | grep -c '"version":"v3"')
+    if [ "$STATUS" -gt 0 ]; then
+        return 0
+    fi
+    return 1
 }
 
 start() {
@@ -51,16 +80,16 @@ start() {
     echo $! > "$PID_FILE"
     PID=$(cat "$PID_FILE")
 
-    # 정상 기동 확인 (최대 5초 대기)
-    for i in $(seq 1 5); do
+    # 정상 기동 및 V3 route 확인 (최대 10초 대기)
+    for i in $(seq 1 10); do
         sleep 1
-        if is_running; then
-            echo -e "${GREEN}[mcp-server] 시작 완료 (PID: $PID)${NC}"
+        if is_running && is_v3_ready; then
+            echo -e "${GREEN}[mcp-server] 시작 완료 (PID: $PID, V3 ready)${NC}"
             return 0
         fi
     done
 
-    echo -e "${RED}[mcp-server] 시작 실패. 로그를 확인하세요: $LOG_FILE${NC}"
+    echo -e "${RED}[mcp-server] 시작 실패 또는 V3 route 확인 실패. 로그를 확인하세요: $LOG_FILE${NC}"
     rm -f "$PID_FILE"
     return 1
 }
@@ -102,7 +131,11 @@ restart() {
 status() {
     if is_running; then
         PID=$(cat "$PID_FILE")
-        echo -e "${GREEN}[mcp-server] 실행 중 (PID: $PID)${NC}"
+        if is_v3_ready; then
+            echo -e "${GREEN}[mcp-server] 실행 중 (PID: $PID, V3 ready)${NC}"
+        else
+            echo -e "${YELLOW}[mcp-server] 실행 중이지만 V3 health 확인 실패 (PID: $PID)${NC}"
+        fi
     else
         echo -e "${RED}[mcp-server] 중지 상태${NC}"
     fi

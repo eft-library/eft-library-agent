@@ -67,6 +67,16 @@ async def lifespan(server):
 mcp = FastMCP("eft-library-rag", lifespan=lifespan)
 
 
+@mcp.custom_route("/health", methods=["GET"])
+async def health() -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
+
+@mcp.custom_route("/api/rag/v3/health", methods=["GET"])
+async def rag_v3_health() -> JSONResponse:
+    return JSONResponse({"status": "ok", "version": "v3"})
+
+
 @mcp.custom_route("/api/rag/chat/stream", methods=["POST"])
 async def rag_chat_stream(request: Request) -> StreamingResponse:
     try:

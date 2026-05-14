@@ -165,6 +165,9 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
   }'
 ```
 
+If backend logs show `incomplete chunked read`, the agent stream closed before sending a complete SSE response.
+Both backend and agent stream layers should emit an SSE `error` event followed by `done` so FastAPI does not raise a traceback to the client.
+
 ## Run Server
 
 ```bash
@@ -172,3 +175,14 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
 ```
 
 서버는 `MCP_HOST`, `MCP_PORT` 값을 사용합니다.
+
+운영 재시작:
+
+```bash
+./restart.sh restart
+./restart.sh status
+curl http://127.0.0.1:15000/api/rag/v3/health
+```
+
+`restart.sh`는 `main.py`를 재시작하며, V3 health route가 응답하는지 확인합니다.
+V3 코드를 배포한 뒤에는 반드시 agent 서버를 재시작해야 backend `/api/chat/stream`이 새 `/api/rag/v3/chat/stream` 경로를 사용할 수 있습니다.

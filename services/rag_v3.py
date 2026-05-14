@@ -84,27 +84,43 @@ async def run_rag_pipeline_stream_v3(
     history_limit: int = int(os.getenv("RAG_LIMIT", "3")),
     domain: Domain | None = None,
 ):
-    history = await get_history_v3(session_id, limit=history_limit)
-    await save_message_v3(session_id, "user", user_query, lang)
-
-    docs = await search_rag_v3(
-        query=user_query,
-        lang=lang,
-        limit=rag_limit,
-        domain=domain,
-    )
-    sources = source_docs_v3(docs)
-    context = build_context_v3(docs)
-
-    yield f"data: {json.dumps({'type': 'docs', 'docs': sources}, ensure_ascii=False)}\n\n"
-
-    messages = [*history, ChatMessageV3(role="user", content=user_query)]
     full_answer = ""
-    async for token in chat_llm_stream_v3(messages=messages, context=context, lang=lang):
-        full_answer += token
-        yield f"data: {json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
+    sources: list[dict] = []
+    try:
+        history = await get_history_v3(session_id, limit=history_limit)
+        await save_message_v3(session_id, "user", user_query, lang)
 
-    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        docs = await search_rag_v3(
+            query=user_query,
+            lang=lang,
+            limit=rag_limit,
+            domain=domain,
+        )
+        sources = source_docs_v3(docs)
+        context = build_context_v3(docs)
 
-    await save_message_v3(session_id, "assistant", full_answer, lang, sources)
-    log.info("[rag_pipeline_v3] session=%s docs=%s", session_id, len(docs))
+        yield f"data: {json.dumps({'type': 'docs', 'docs': sources}, ensure_ascii=False)}\n\n"
+
+        messages = [*history, ChatMessageV3(role="user", content=user_query)]
+        async for token in chat_llm_stream_v3(messages=messages, context=context, lang=lang):
+            full_answer += token
+            yield f"data: {json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
+
+        yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+
+        await save_message_v3(session_id, "assistant", full_answer, lang, sources)
+        log.info("[rag_pipeline_v3] session=%s docs=%s", session_id, len(docs))
+    except Exception as exc:
+        log.exception("[rag_pipeline_v3] stream error session=%s", session_id)
+        error_payload = {
+            "type": "error",
+            "message": "RAG 응답 생성 중 오류가 발생했습니다.",
+            "detail": str(exc),
+        }
+        yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+        if full_answer:
+            try:
+                await save_message_v3(session_id, "assistant", full_answer, lang, sources)
+            except Exception:
+                log.exception("[rag_pipeline_v3] failed to save partial answer")
