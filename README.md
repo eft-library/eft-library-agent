@@ -129,6 +129,7 @@ V3 검색은 `tools/retriever_v3.py`를 사용합니다.
 ## V3 Evaluation
 
 대표 질문 세트로 retrieval 품질을 빠르게 확인합니다.
+실제 사용자 질문에서 뽑은 대표 케이스를 포함하되, 욕설/인사/사이트 불만/최신 외부 정보처럼 정답 기준이 다른 질문은 별도 개선 대상으로 다룹니다.
 
 ```bash
 ./venv/bin/python -m tools.eval_v3
@@ -145,6 +146,14 @@ V3 검색은 `tools/retriever_v3.py`를 사용합니다.
 ```bash
 ./venv/bin/python -m tools.eval_v3 --case item_craft_salewa
 ```
+
+Known follow-up candidates from historical user prompts:
+
+- key location intent: `bloody 키 위치`, `블러드키 위치`, `세관 빨간 창고 여는 열쇠 뭐야?`
+- unlock/quest dependency intent: `상인 예거는 어떤 퀘스트를 완료해야 해금이 돼?`, `카파퀘 꼭 퀘스트 해야 풀려`
+- external/current facts: `지금 진행중인 이벤트 알려줘`, `현재 사용 가능한 코드`, `시세 알려줘`
+- site/meta support: `광고 좀 지워줘`, `로그인이 안되`, `홈페이지가 화이트로 바뀌었어요`
+- off-topic/safety: food recipes, insults, prompt-injection style requests
 
 ## V3 Answer Pipeline
 
