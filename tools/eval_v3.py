@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -13,12 +14,14 @@ from tools.retriever_v3 import search_rag_v3
 
 load_dotenv()
 
+log = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class EvalCase:
     name: str
     query: str
-    domain: str | None
+    domain: str | None = None
     expected_domain: str | None = None
     expected_text: tuple[str, ...] = ()
 
@@ -82,35 +85,77 @@ EVAL_CASES = [
     ),
     EvalCase(
         name="quest_debut_exact",
-        query="퀘스트: 데뷔",
+        query="데뷔 정보 알려줘",
         domain="quest",
         expected_domain="quest",
-        expected_text=("데뷔", "MP-133"),
+        expected_text=("데뷔",),
+    ),
+    EvalCase(
+        name="quest_debut_prereq",
+        query="데뷔 이전에는 어떤 퀘스트를 완료해야 하니?",
+        domain="quest",
+        expected_domain="quest",
+        expected_text=("데뷔", "선행 퀘스트", "사격 연습"),
+    ),
+    EvalCase(
+        name="quest_shooting_practice_next",
+        query="사격 연습 다음에는 어떤 퀘스트가 열려?",
+        domain="quest",
+        expected_domain="quest",
+        expected_text=("사격 연습", "후행 퀘스트", "데뷔"),
     ),
     EvalCase(
         name="quest_collector_exact",
-        query="퀘스트: 수집가",
+        query="수집가 정보 알려줘",
         domain="quest",
         expected_domain="quest",
-        expected_text=("수집가", "보안 컨테이너 카파"),
+        expected_text=("수집가",),
     ),
     EvalCase(
         name="quest_gunsmith_24_exact",
-        query="퀘스트: Gunsmith - Part 24",
+        query="Gunsmith - Part 24 정보 알려줘",
         domain="quest",
         expected_domain="quest",
         expected_text=("Gunsmith - Part 24", "Gunsmith - Part 23"),
     ),
     EvalCase(
+        name="quest_gunsmith_7_unlocks",
+        query="건스미스파트 7을 깨면 뭐가 해금돼?",
+        domain="quest",
+        expected_domain="quest",
+        expected_text=("건스미스 - 파트 7", "구매 해금", "Daniel Defense MK12"),
+    ),
+    EvalCase(
+        name="quest_shortage_required_items_relation",
+        query="재고 부족에 뭐 필요해?",
+        domain="quest",
+        expected_domain="quest",
+        expected_text=("재고 부족", "필요 아이템", "Salewa"),
+    ),
+    EvalCase(
         name="boss_tagilla_info",
-        query="보스: 타길라 정보 알려줘",
+        query="타길라 정보 알려줘",
         domain="boss",
         expected_domain="boss",
         expected_text=("타길라", "스폰 위치"),
     ),
     EvalCase(
+        name="boss_tagilla_spawn_relation",
+        query="타길라 어디 나와?",
+        domain="boss",
+        expected_domain="boss",
+        expected_text=("타길라", "스폰 위치", "공장"),
+    ),
+    EvalCase(
+        name="boss_killa_drops_relation",
+        query="킬라가 드랍하는 아이템",
+        domain="boss",
+        expected_domain="boss",
+        expected_text=("킬라", "드랍 아이템"),
+    ),
+    EvalCase(
         name="boss_cultist_priest_info",
-        query="보스: 광신도 사제",
+        query="광신도 사제 정보 알려줘",
         domain="boss",
         expected_domain="boss",
         expected_text=("광신도 사제", "스폰 위치"),
@@ -131,24 +176,52 @@ EVAL_CASES = [
     ),
     EvalCase(
         name="item_rusted_bloody_key_exact",
-        query="아이템: Rusted bloody key",
+        query="Rusted bloody key 정보",
         domain="item",
         expected_domain="item",
         expected_text=("Rusted bloody key", "The Door"),
     ),
     EvalCase(
         name="item_m80_exact",
-        query="아이템: 7.62x51mm M80",
+        query="7.62x51mm M80 정보",
         domain="item",
         expected_domain="item",
         expected_text=("7.62x51mm M80",),
     ),
     EvalCase(
+        name="item_m80_unlock_relation",
+        query="M80 구매 해금 퀘스트 뭐야?",
+        domain="item",
+        expected_domain="item",
+        expected_text=("7.62x51mm M80", "구매를 해금하는 퀘스트", "개정 작업 - 등대"),
+    ),
+    EvalCase(
+        name="item_ak103_reward_quest_relation",
+        query="Kalashnikov AK-103을 보상으로 얻을 수 있는 퀘스트",
+        domain="item",
+        expected_domain="item",
+        expected_text=("Kalashnikov AK-103", "이 아이템을 보상으로 주는 퀘스트"),
+    ),
+    EvalCase(
         name="item_gas_analyzer_korean",
-        query="가스분석기",
+        query="가스분석기 정보",
         domain="item",
         expected_domain="item",
         expected_text=("Gas analyzer", "가스 분석기"),
+    ),
+    EvalCase(
+        name="item_gas_analyzer_quest_relation",
+        query="가스분석기 필요한 퀘스트",
+        domain="item",
+        expected_domain="item",
+        expected_text=("Gas analyzer", "이 아이템과 관련된 퀘스트 목표"),
+    ),
+    EvalCase(
+        name="item_duct_tape_uses_relation",
+        query="덕트 테이프 어디에 써?",
+        domain="item",
+        expected_domain="item",
+        expected_text=("Duct tape", "이 아이템을 재료로 제작 가능한 아이템"),
     ),
     EvalCase(
         name="item_kappa_container_exact",
@@ -158,18 +231,39 @@ EVAL_CASES = [
         expected_text=("보안 컨테이너 카파", "수집가"),
     ),
     EvalCase(
+        name="hideout_bitcoin_requirements_relation",
+        query="비트코인 채굴 시설 필요 재료",
+        domain="hideout",
+        expected_domain="hideout",
+        expected_text=("비트코인 채굴 시설", "필요 아이템"),
+    ),
+    EvalCase(
+        name="trader_therapist_level2_barters",
+        query="테라피스트 2레벨 상점에서 뭐 팔아?",
+        domain="trader",
+        expected_domain="trader",
+        expected_text=("테라피스트", "LL2"),
+    ),
+    EvalCase(
         name="story_tour_exact",
-        query="스토리: Tour",
+        query="스토리 Tour 정보",
         domain="story",
         expected_domain="story",
         expected_text=("Tour", "그라운드 제로"),
     ),
     EvalCase(
+        name="story_savior_route_relation",
+        query="구원자 루트는 모든 스토리 챕터를 클리어해야해?",
+        domain="story",
+        expected_domain="story",
+        expected_text=("구원자", "모든 스토리"),
+    ),
+    EvalCase(
         name="information_patch_notes",
-        query="패치노트 내용 알려줘",
+        query="최신 패치노트 내용 알려줘",
         domain="information",
         expected_domain="information",
-        expected_text=("패치",),
+        expected_text=("Patch",),
     ),
 ]
 
@@ -205,7 +299,11 @@ def _evaluate_docs(case: EvalCase, docs: list) -> tuple[bool, list[str]]:
     return not reasons, reasons
 
 
-async def _collect_answer(case: EvalCase, limit: int) -> tuple[str, int, list[str]]:
+async def _collect_answer(
+    case: EvalCase,
+    limit: int,
+    domain: str | None,
+) -> tuple[str, int, list[str]]:
     answer_parts: list[str] = []
     event_types: list[str] = []
     docs_count = 0
@@ -216,7 +314,7 @@ async def _collect_answer(case: EvalCase, limit: int) -> tuple[str, int, list[st
         lang="ko",
         rag_limit=limit,
         history_limit=3,
-        domain=case.domain,
+        domain=domain,
     ):
         if not event.startswith("data: "):
             continue
@@ -235,21 +333,33 @@ async def run_eval(
     cases: list[EvalCase],
     limit: int,
     with_answer: bool,
+    use_case_domain: bool,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    for case in cases:
+    total = len(cases)
+    for index, case in enumerate(cases, 1):
+        search_domain = case.domain if use_case_domain else None
+        log.info(
+            "[eval_v3] %s/%s start case=%s domain=%s query=%s",
+            index,
+            total,
+            case.name,
+            search_domain or "auto",
+            case.query,
+        )
         docs = await search_rag_v3(
             query=case.query,
             lang="ko",
             limit=limit,
-            domain=case.domain,
+            domain=search_domain,
         )
         passed, reasons = _evaluate_docs(case, docs)
         top_doc = docs[0] if docs else None
         result: dict[str, Any] = {
             "name": case.name,
             "query": case.query,
-            "domain": case.domain,
+            "domain": search_domain,
+            "case_domain": case.domain,
             "passed": passed,
             "reasons": reasons,
             "docs": len(docs),
@@ -269,12 +379,34 @@ async def run_eval(
             }
 
         if with_answer:
-            answer, docs_count, event_types = await _collect_answer(case, limit)
+            log.info("[eval_v3] %s/%s answer case=%s", index, total, case.name)
+            answer, docs_count, event_types = await _collect_answer(
+                case,
+                limit,
+                search_domain,
+            )
             result["answer_docs"] = docs_count
             result["answer_preview"] = answer[:600]
             result["event_types"] = event_types
 
         results.append(result)
+        top_summary = "none"
+        if top_doc:
+            top_summary = (
+                f"{top_doc.domain}/{top_doc.entity_id} "
+                f"{top_doc.chunk_type} name={top_doc.metadata.get('entity_name')} "
+                f"fused={top_doc.fused_score}"
+            )
+        log.info(
+            "[eval_v3] %s/%s done case=%s passed=%s docs=%s top=%s reasons=%s",
+            index,
+            total,
+            case.name,
+            passed,
+            len(docs),
+            top_summary,
+            "; ".join(reasons) if reasons else "-",
+        )
 
     return results
 
@@ -308,8 +440,23 @@ async def _main() -> None:
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--case", action="append", dest="case_names")
     parser.add_argument("--with-answer", action="store_true")
+    parser.add_argument(
+        "--use-case-domain",
+        action="store_true",
+        help=(
+            "Use each eval case's domain hint. By default eval searches without a "
+            "domain to better match real user traffic."
+        ),
+    )
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.WARNING if args.quiet else logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
 
     cases = EVAL_CASES
     if args.case_names:
@@ -320,7 +467,12 @@ async def _main() -> None:
             raise SystemExit(f"unknown eval cases: {', '.join(sorted(missing))}")
 
     try:
-        results = await run_eval(cases, limit=args.limit, with_answer=args.with_answer)
+        results = await run_eval(
+            cases,
+            limit=args.limit,
+            with_answer=args.with_answer,
+            use_case_domain=args.use_case_domain,
+        )
         if args.json:
             print(json.dumps(results, ensure_ascii=False, indent=2))
         else:

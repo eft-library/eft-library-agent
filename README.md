@@ -24,6 +24,8 @@ python -m venv venv
 - `RAG_V3_MAX_CONTEXT_CHARS`
 - `RAG_V3_ANSWERABILITY_CHECK`
 - `RAG_V3_ANSWERABILITY_MAX_CONTEXT_CHARS`
+- `RAG_V3_AUTO_DOMAIN_FILTER`
+- `RAG_V3_DOMAIN_ROUTE_BOOST`
 - `WEB_FALLBACK_ENABLED`
 - `WEB_SEARCH_PROVIDER`
 - `WEB_SEARCH_API_KEY`
@@ -115,6 +117,8 @@ V3 검색은 `tools/retriever_v3.py`를 사용합니다.
 - PostgreSQL `tsvector`
 - PostgreSQL `pg_trgm`
 - reciprocal rank fusion
+- automatic high-confidence domain filtering
+- soft domain route boosting
 - reranker 없음
 
 예시:
@@ -129,11 +133,35 @@ V3 검색은 `tools/retriever_v3.py`를 사용합니다.
 ## V3 Evaluation
 
 대표 질문 세트로 retrieval 품질을 빠르게 확인합니다.
+현재 기본 세트는 엔티티 검색과 관계형 질문을 포함합니다.
 실제 사용자 질문에서 뽑은 대표 케이스를 포함하되, 욕설/인사/사이트 불만/최신 외부 정보처럼 정답 기준이 다른 질문은 별도 개선 대상으로 다룹니다.
+
+포함하는 관계형 질문 예:
+
+- 선행/후행 퀘스트
+- 필요 아이템과 보상
+- 구매/제작 해금
+- 아이템 사용처와 보상 퀘스트
+- 보스 스폰/드랍
+- 은신처 업그레이드 요구사항
+- 스토리 로드맵 분기
 
 ```bash
 ./venv/bin/python -m tools.eval_v3
 ```
+
+By default, eval searches without forcing a domain.
+This is closer to real user traffic and can expose routing or cross-domain noise.
+The retriever still may infer a domain internally from high-confidence user intent, such as quest dependencies, boss drops, map names, item usage, hideout requirements, or story roadmap questions.
+
+To run the older scoped regression mode, where each case uses its expected domain hint:
+
+```bash
+./venv/bin/python -m tools.eval_v3 --use-case-domain
+```
+
+Eval logs progress for each case by default.
+Use `--quiet` to suppress progress logs, or `--verbose` for more detailed logs.
 
 실제 LLM 답변 생성까지 포함해서 확인할 때:
 

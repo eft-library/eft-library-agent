@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from db.connection import get_pool
 from db.connection import close_pool
 from schemas.models_v3 import Domain, Lang, RagDocumentV3
+from tools.domain_router_v3 import infer_domain_boosts_v3, infer_domain_filter_v3
 from tools.embedder import get_embedding
 
 load_dotenv()
@@ -20,6 +21,8 @@ VECTOR_THRESHOLD = float(os.getenv("RAG_V3_VECTOR_THRESHOLD", "0.45"))
 TRGM_THRESHOLD = float(os.getenv("RAG_TRGM_THRESHOLD", "0.08"))
 RRF_K = int(os.getenv("RAG_RRF_K", "60"))
 ANSWER_CHUNK_LIMIT = int(os.getenv("RAG_ANSWER_CHUNK_LIMIT", "12"))
+DOMAIN_ROUTE_BOOST_ENABLED = os.getenv("RAG_V3_DOMAIN_ROUTE_BOOST", "true").lower() == "true"
+AUTO_DOMAIN_FILTER_ENABLED = os.getenv("RAG_V3_AUTO_DOMAIN_FILTER", "true").lower() == "true"
 
 SEARCHABLE_CHUNK_TYPES = ("identifier", "retrieval", "summary", "relation")
 ANSWER_CHUNK_TYPES = ("content", "relation", "guide", "summary", "retrieval")
@@ -55,7 +58,44 @@ LEXICAL_OR_STOPWORDS = {
     "required",
     "where",
     "how",
+    "정보",
+    "알려줘",
+    "알려",
+    "내용",
 }
+
+
+def _normalize_query_for_search(query: str) -> str:
+    normalized = query.strip()
+    replacements = [
+        r"\s*(정보\s*)?알려\s*줘요?\??$",
+        r"\s*정보\s*$",
+        r"\s*내용\s*$",
+    ]
+    for pattern in replacements:
+        normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE).strip()
+    return normalized or query
+
+
+def _compact_text(value: str) -> str:
+    return re.sub(r"\s+", "", value.strip().lower())
+
+
+def _entity_name_matches_query(metadata: dict, query: str) -> bool:
+    query_compact = _compact_text(query)
+    if not query_compact:
+        return False
+    names = [
+        str(metadata.get("entity_name") or ""),
+        str(metadata.get("title") or ""),
+    ]
+    for name in names:
+        name_compact = _compact_text(name)
+        if len(name_compact) < 2:
+            continue
+        if name_compact in query_compact or query_compact in name_compact:
+            return True
+    return False
 
 
 def _lexical_or_query(query: str) -> str:
@@ -116,9 +156,17 @@ async def search_rag_v3(
     limit: int = int(os.getenv("RAG_LIMIT", "10")),
     domain: Domain | None = None,
 ) -> list[RagDocumentV3]:
-    embedding = await get_embedding(query)
+    search_query = _normalize_query_for_search(query)
+    auto_domain: Domain | None = None
+    if AUTO_DOMAIN_FILTER_ENABLED and not domain:
+        auto_domain = infer_domain_filter_v3(query)
+        if auto_domain:
+            log.info("[retriever_v3] auto domain query=%s domain=%s", query[:40], auto_domain)
+            domain = auto_domain
+
+    embedding = await get_embedding(search_query)
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
-    lexical_or_query = _lexical_or_query(query)
+    lexical_or_query = _lexical_or_query(search_query)
     candidate_limit = max(limit * 4, 20)
 
     pool = await get_pool()
@@ -130,14 +178,14 @@ async def search_rag_v3(
             candidate_limit,
         ]
         lexical_params = [
-            query,
+            search_query,
             lang,
             list(SEARCHABLE_CHUNK_TYPES),
             candidate_limit,
             lexical_or_query,
         ]
         trigram_params = [
-            query,
+            search_query,
             lang,
             list(SEARCHABLE_CHUNK_TYPES),
             candidate_limit,
@@ -217,6 +265,15 @@ async def search_rag_v3(
             [list(vector_rows), list(lexical_rows), list(trigram_rows)],
             k=RRF_K,
         )
+        route_boosts = {}
+        if DOMAIN_ROUTE_BOOST_ENABLED and not domain:
+            route_boosts = infer_domain_boosts_v3(query)
+            if route_boosts:
+                log.info("[retriever_v3] domain boosts query=%s boosts=%s", query[:40], route_boosts)
+                rrf_scores = {
+                    key: score * route_boosts.get(key[0], 1.0)
+                    for key, score in rrf_scores.items()
+                }
 
         if not rrf_scores:
             log.info("[retriever_v3] no candidates query=%s", query[:40])
@@ -278,6 +335,27 @@ async def search_rag_v3(
             list(ANSWER_CHUNK_TYPES),
             ANSWER_CHUNK_LIMIT,
         )
+
+    def _row_sort_key(row) -> tuple[int, int, int, str]:
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        exact_entity_match = _entity_name_matches_query(metadata, search_query)
+        chunk_order = {
+            "relation": 1,
+            "content": 2,
+            "guide": 3,
+            "summary": 4,
+            "retrieval": 5,
+        }.get(row["chunk_type"], 9)
+        return (
+            0 if exact_entity_match else 1,
+            int(row["ord"]),
+            chunk_order,
+            row["chunk_id"],
+        )
+
+    rows = sorted(rows, key=_row_sort_key)
 
     results: list[RagDocumentV3] = []
     for row in rows:
