@@ -31,6 +31,7 @@ python -m venv venv
 - `WEB_SEARCH_API_KEY`
 - `WEB_FALLBACK_DOMAINS`
 - `WEB_SEARCH_LIMIT`
+- `WEB_PUBLIC_SEARCH_ENABLED`
 - `WEB_FALLBACK_STEAM_APP_ID`
 - `WEB_FALLBACK_STEAM_COUNTRY`
 - `WEB_FALLBACK_STEAM_LANG`
@@ -262,6 +263,8 @@ Recommended approach:
 Default allowed domains:
 
 - `store.steampowered.com/app/3932890`
+- `www.escapefromtarkov.com/news`
+- `escapefromtarkov.com/news`
 - `gall.dcinside.com/mgallery/board`
 - `tarkov.dev`
 - `escapefromtarkov.fandom.com`
@@ -283,9 +286,10 @@ Example `.env`:
 WEB_FALLBACK_ENABLED=true
 WEB_SEARCH_PROVIDER=public
 WEB_SEARCH_LIMIT=5
+WEB_PUBLIC_SEARCH_ENABLED=true
 RAG_V3_ANSWERABILITY_CHECK=true
 RAG_V3_ANSWERABILITY_MAX_CONTEXT_CHARS=6000
-WEB_FALLBACK_DOMAINS=store.steampowered.com/app/3932890,gall.dcinside.com/mgallery/board,tarkov.dev,escapefromtarkov.fandom.com
+WEB_FALLBACK_DOMAINS=store.steampowered.com/app/3932890,www.escapefromtarkov.com/news,escapefromtarkov.com/news,gall.dcinside.com/mgallery/board,tarkov.dev,escapefromtarkov.fandom.com
 WEB_FALLBACK_STEAM_APP_ID=3932890
 WEB_FALLBACK_STEAM_COUNTRY=KR
 WEB_FALLBACK_STEAM_LANG=korean
@@ -294,6 +298,8 @@ WEB_FALLBACK_STEAM_LANG=korean
 `public` provider does not require an API key, but it is best-effort:
 
 - Steam purchase/price questions use the public Steam Store appdetails API first.
+- Fandom results use the MediaWiki API before falling back to generic public search.
+- Public search rewrites common Korean Tarkov terms, such as `미궁`, `블러드키`, `여는 법`, `진행중인 이벤트`, and `패치노트`, into search-friendly English queries.
 - DCInside currently returns public HTML and can be parsed.
 - ArcaLive is intentionally excluded because server-side requests are commonly blocked by Cloudflare challenge.
 - Layout changes or anti-bot rules can break direct parsing.
