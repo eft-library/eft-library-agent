@@ -128,8 +128,8 @@ def infer_domain_boosts_v3(query: str) -> dict[Domain, float]:
 
     if any(term in compact for term in ("선행퀘스트", "후행퀘스트", "이전에는어떤퀘스트", "다음에는어떤퀘스트")):
         boost("quest", 1.45)
-    if "퀘스트" in compact and any(term in compact for term in ("필요", "해금", "보상", "완료", "깨면", "열려")):
-        boost("quest", 1.3)
+    if "퀘스트" in compact and any(term in compact for term in ("필요", "해금", "보상", "완료", "깨면", "열려", "잡", "사살", "처치", "제거")):
+        boost("quest", 1.55)
 
     if any(term in compact for term in ("어디서얻", "어디서구", "파밍처", "구하는법", "필요한퀘스트")):
         boost("item", 1.35)
@@ -180,7 +180,7 @@ def infer_domain_filter_v3(query: str) -> Domain | None:
 
     if any(term in compact for term in ("선행퀘스트", "후행퀘스트", "이전에는어떤퀘스트", "다음에는어떤퀘스트")):
         return "quest"
-    if "퀘스트" in compact and any(term in compact for term in ("완료해야", "다음에는", "이전에는", "깨면뭐가해금")):
+    if "퀘스트" in compact and any(term in compact for term in ("완료해야", "다음에는", "이전에는", "깨면뭐가해금", "잡", "사살", "처치", "제거")):
         return "quest"
 
     if any(alias.replace(" ", "") in compact for alias in BOSS_ALIASES):

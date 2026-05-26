@@ -154,6 +154,13 @@ EVAL_CASES = [
         expected_text=("킬라", "드랍 아이템"),
     ),
     EvalCase(
+        name="quest_glukhar_kill_auto_route",
+        query="글루하 잡는 퀘스트",
+        domain=None,
+        expected_domain="quest",
+        expected_text=("글루하", "Payback", "사냥꾼의 길 - 말살자 - 파트 1"),
+    ),
+    EvalCase(
         name="boss_cultist_priest_info",
         query="광신도 사제 정보 알려줘",
         domain="boss",

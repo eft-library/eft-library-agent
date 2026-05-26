@@ -217,6 +217,7 @@ V3 검색은 `tools/retriever_v3.py`를 사용합니다.
 By default, eval searches without forcing a domain.
 This is closer to real user traffic and can expose routing or cross-domain noise.
 The retriever still may infer a domain internally from high-confidence user intent, such as quest dependencies, boss drops, map names, item usage, hideout requirements, or story roadmap questions.
+Boss kill quest questions such as `글루하 잡는 퀘스트` are routed to the quest domain so boss profile/drop chunks do not drown out quest objectives.
 
 To run the older scoped regression mode, where each case uses its expected domain hint:
 
