@@ -262,6 +262,8 @@ V3 답변 생성 경로:
 Before answer generation, `services/rag_v3.py` runs an answerability guard.
 This guard checks whether retrieved local documents actually contain enough information to answer the user question.
 If local results are broad keyword noise or lack the requested fact, the pipeline uses web fallback instead of answering from unrelated chunks.
+The V3 context also includes a short relation legend so the local model preserves item relationship direction.
+For example, `[이 아이템 제작에 필요한 재료]` means the item is craftable, and the facility/level in parentheses is the craft location.
 
 스트리밍 API 요청 예시:
 

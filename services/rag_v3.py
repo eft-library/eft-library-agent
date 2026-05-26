@@ -24,8 +24,14 @@ def build_context_v3(
     if not docs:
         return ""
 
-    parts: list[str] = []
-    used_chars = 0
+    parts: list[str] = [
+        "[관계 섹션 해석 규칙]",
+        "- [이 아이템 제작에 필요한 재료]: 이 아이템은 제작 가능하며, 각 항목 괄호의 시설/Lv가 제작 위치입니다.",
+        "- [이 아이템을 재료로 제작 가능한 아이템]: 이 아이템을 재료로 써서 만들 수 있는 결과물입니다.",
+        "- [이 아이템 교환에 필요한 재료]: 이 아이템을 바터로 받기 위해 필요한 재료입니다.",
+        "- [이 아이템을 재료로 교환 가능한 아이템]: 이 아이템을 내고 받을 수 있는 바터 결과물입니다.",
+    ]
+    used_chars = sum(len(part) + 1 for part in parts)
     for i, doc in enumerate(docs, 1):
         metadata = doc.metadata or {}
         entity_name = metadata.get("entity_name") or metadata.get("title") or doc.entity_id
