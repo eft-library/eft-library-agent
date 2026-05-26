@@ -19,6 +19,9 @@ log = logging.getLogger(__name__)
 
 VECTOR_THRESHOLD = float(os.getenv("RAG_V3_VECTOR_THRESHOLD", "0.45"))
 TRGM_THRESHOLD = float(os.getenv("RAG_TRGM_THRESHOLD", "0.08"))
+NAME_EXPANSION_ENABLED = os.getenv("RAG_V3_NAME_EXPANSION", "true").lower() == "true"
+NAME_EXPANSION_THRESHOLD = float(os.getenv("RAG_V3_NAME_EXPANSION_THRESHOLD", "0.22"))
+NAME_EXPANSION_MAX_TERMS = int(os.getenv("RAG_V3_NAME_EXPANSION_MAX_TERMS", "8"))
 RRF_K = int(os.getenv("RAG_RRF_K", "60"))
 ANSWER_CHUNK_LIMIT = int(os.getenv("RAG_ANSWER_CHUNK_LIMIT", "12"))
 DOMAIN_ROUTE_BOOST_ENABLED = os.getenv("RAG_V3_DOMAIN_ROUTE_BOOST", "true").lower() == "true"
@@ -36,12 +39,19 @@ LEXICAL_OR_STOPWORDS = {
     "제작",
     "만들",
     "만드는",
+    "만들어",
+    "만들어줘",
     "필요",
     "필요한",
     "요구",
     "어디",
     "어디서",
+    "어디에",
+    "어디씀",
+    "어디써",
     "어떻게",
+    "써",
+    "씀",
     "해",
     "함",
     "드랍",
@@ -63,6 +73,81 @@ LEXICAL_OR_STOPWORDS = {
     "알려",
     "내용",
 }
+
+HANGUL_INITIALS = (
+    "g",
+    "kk",
+    "n",
+    "d",
+    "tt",
+    "r",
+    "m",
+    "b",
+    "pp",
+    "s",
+    "ss",
+    "",
+    "j",
+    "jj",
+    "ch",
+    "k",
+    "t",
+    "p",
+    "h",
+)
+HANGUL_MEDIALS = (
+    "a",
+    "ae",
+    "ya",
+    "yae",
+    "eo",
+    "e",
+    "yeo",
+    "ye",
+    "o",
+    "wa",
+    "wae",
+    "oe",
+    "yo",
+    "u",
+    "wo",
+    "we",
+    "wi",
+    "yu",
+    "eu",
+    "ui",
+    "i",
+)
+HANGUL_FINALS = (
+    "",
+    "k",
+    "k",
+    "ks",
+    "n",
+    "nj",
+    "nh",
+    "t",
+    "l",
+    "lk",
+    "lm",
+    "lb",
+    "ls",
+    "lt",
+    "lp",
+    "lh",
+    "m",
+    "p",
+    "ps",
+    "t",
+    "t",
+    "ng",
+    "t",
+    "t",
+    "k",
+    "t",
+    "p",
+    "t",
+)
 
 
 def _normalize_query_for_search(query: str) -> str:
@@ -116,6 +201,63 @@ def _lexical_or_query(query: str) -> str:
     return " | ".join(dict.fromkeys(terms))
 
 
+def _romanize_hangul_token(token: str) -> str:
+    parts = []
+    for char in token:
+        code = ord(char)
+        if not 0xAC00 <= code <= 0xD7A3:
+            if char.isascii() and char.isalnum():
+                parts.append(char.lower())
+            continue
+        syllable = code - 0xAC00
+        initial = syllable // 588
+        medial = (syllable % 588) // 28
+        final = syllable % 28
+        parts.append(
+            HANGUL_INITIALS[initial]
+            + HANGUL_MEDIALS[medial]
+            + HANGUL_FINALS[final]
+        )
+    return "".join(parts)
+
+
+def _name_expansion_terms(query: str) -> list[str]:
+    tokens = re.findall(r"[0-9A-Za-z가-힣]+", query)
+    terms = []
+    for token in tokens:
+        token = token.strip()
+        if len(token) < 2:
+            continue
+        token_key = token.lower()
+        if token_key in LEXICAL_OR_STOPWORDS:
+            continue
+        if re.search(r"[가-힣]", token):
+            romanized = _romanize_hangul_token(token)
+            if len(romanized) >= 3:
+                terms.append(romanized)
+                # ㄹ is ambiguous in Korean-to-Latin user searches. This helps
+                # "살레와" match "salewa" in addition to strict "salrewa".
+                terms.append(re.sub(r"lr(?=[aeiou])", "l", romanized))
+                terms.append(romanized.replace("r", ""))
+                loanword = romanized.replace("eu", "")
+                terms.append(loanword)
+                z_loanword = loanword.replace("j", "z")
+                terms.append(z_loanword)
+                terms.append(z_loanword.replace("zlri", "zzly"))
+                terms.append(z_loanword.replace("zli", "zzly"))
+        elif len(token) >= 3:
+            terms.append(token_key)
+
+    cleaned = []
+    for term in terms:
+        term = re.sub(r"[^0-9a-z]+", " ", term.lower()).strip()
+        if len(term) >= 3 and term not in cleaned:
+            cleaned.append(term)
+        if len(cleaned) >= NAME_EXPANSION_MAX_TERMS:
+            break
+    return cleaned
+
+
 def _entity_key(row) -> tuple[str, str]:
     return row["domain"], row["entity_id"]
 
@@ -167,6 +309,7 @@ async def search_rag_v3(
     embedding = await get_embedding(search_query)
     embedding_str = "[" + ",".join(map(str, embedding)) + "]"
     lexical_or_query = _lexical_or_query(search_query)
+    name_expansion_terms = _name_expansion_terms(search_query)
     candidate_limit = max(limit * 4, 20)
 
     pool = await get_pool()
@@ -261,8 +404,52 @@ async def search_rag_v3(
             *trigram_params,
         )
 
+        name_expansion_rows = []
+        if NAME_EXPANSION_ENABLED and name_expansion_terms and domain in (None, "item"):
+            name_expansion_rows = await conn.fetch(
+                """
+                WITH terms(term) AS (
+                    SELECT * FROM unnest($1::text[])
+                ),
+                item_scores AS (
+                    SELECT
+                        i.id AS entity_id,
+                        max(
+                            greatest(
+                                similarity(coalesce(i.name_en, ''), terms.term),
+                                similarity(coalesce(i.name_ko, ''), terms.term),
+                                similarity(coalesce(i.name_ja, ''), terms.term),
+                                similarity(replace(coalesce(i.normalized_name, ''), '-', ' '), terms.term),
+                                similarity(coalesce(i.normalized_name, ''), terms.term)
+                            )
+                        ) AS score
+                    FROM items i
+                    CROSS JOIN terms
+                    GROUP BY i.id
+                )
+                SELECT
+                    'item'::text AS domain,
+                    entity_id,
+                    'name_expansion'::text AS chunk_id,
+                    'identifier'::text AS chunk_type,
+                    score
+                FROM item_scores
+                WHERE score >= $2
+                ORDER BY score DESC
+                LIMIT $3
+                """,
+                name_expansion_terms,
+                NAME_EXPANSION_THRESHOLD,
+                candidate_limit,
+            )
+
         rrf_scores = _reciprocal_rank_fusion(
-            [list(vector_rows), list(lexical_rows), list(trigram_rows)],
+            [
+                list(vector_rows),
+                list(lexical_rows),
+                list(trigram_rows),
+                list(name_expansion_rows),
+            ],
             k=RRF_K,
         )
         route_boosts = {}
@@ -282,6 +469,7 @@ async def search_rag_v3(
         vector_score_map = _max_score_by_entity(list(vector_rows))
         lexical_score_map = _max_score_by_entity(list(lexical_rows))
         trigram_score_map = _max_score_by_entity(list(trigram_rows))
+        name_expansion_score_map = _max_score_by_entity(list(name_expansion_rows))
 
         filtered_keys = [
             key
@@ -291,6 +479,7 @@ async def search_rag_v3(
             if vector_score_map.get(key, 0.0) >= VECTOR_THRESHOLD
             or lexical_score_map.get(key, 0.0) > 0.0
             or trigram_score_map.get(key, 0.0) > 0.0
+            or name_expansion_score_map.get(key, 0.0) > 0.0
         ][:limit]
 
         if not filtered_keys:
@@ -381,11 +570,13 @@ async def search_rag_v3(
         )
 
     log.info(
-        "[retriever_v3] query=%s vector=%s lexical=%s trigram=%s entities=%s chunks=%s",
+        "[retriever_v3] query=%s vector=%s lexical=%s trigram=%s name_expansion=%s terms=%s entities=%s chunks=%s",
         query[:40],
         len(vector_rows),
         len(lexical_rows),
         len(trigram_rows),
+        len(name_expansion_rows),
+        name_expansion_terms,
         len(filtered_keys),
         len(results),
     )

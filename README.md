@@ -20,6 +20,9 @@ python -m venv venv
 - `RAG_LIMIT`
 - `NUM_CTX`
 - `RAG_TRGM_THRESHOLD`
+- `RAG_V3_NAME_EXPANSION`
+- `RAG_V3_NAME_EXPANSION_THRESHOLD`
+- `RAG_V3_NAME_EXPANSION_MAX_TERMS`
 - `RAG_RRF_K`
 - `RAG_V3_MAX_CONTEXT_CHARS`
 - `RAG_V3_ANSWERABILITY_CHECK`
@@ -106,6 +109,60 @@ Qwen chat 호출은 `think: false`를 사용합니다.
 ./venv/bin/python -m rag_alias_v3.item_alias_generator --lang ko
 ```
 
+외부/커뮤니티 텍스트나 수동 정리 CSV에서 후보를 가져올 수도 있습니다.
+가져온 후보는 바로 사용하지 않고 `source = 'import'`, `status = 'pending'`으로 저장합니다.
+
+```bash
+./venv/bin/python -m rag_alias_v3.item_alias_importer --lang ko --csv aliases.csv --dry-run
+./venv/bin/python -m rag_alias_v3.item_alias_importer --lang ko --file community_notes.txt --dry-run
+./venv/bin/python -m rag_alias_v3.item_alias_importer --lang ko --url https://example.com/tarkov-post --dry-run
+./venv/bin/python -m rag_alias_v3.item_alias_importer --lang ko --url-list community_urls.txt --dry-run
+./venv/bin/python -m rag_alias_v3.item_alias_importer --lang ko \
+  --crawl-seed https://example.com/tarkov-board \
+  --crawl-allowed-domain example.com \
+  --crawl-allowed-path-prefix /tarkov-board/ \
+  --crawl-max-pages 20 \
+  --dry-run
+```
+
+`community_urls.txt`는 한 줄에 공개 URL 하나씩 넣습니다.
+빈 줄과 `#`로 시작하는 주석 줄은 무시합니다.
+`--crawl-seed`는 명시한 시작 URL에서 허용 도메인 내부 링크만 제한적으로 순회합니다.
+게시판처럼 관련 글이 특정 경로 아래에 있을 때는 `--crawl-allowed-path-prefix`로 경로도 제한합니다.
+기본 최대 페이지 수는 20개이고, `robots.txt` 허용 여부를 확인합니다.
+커뮤니티 텍스트에서는 기본적으로 "별칭이라고 부른다", "aka", 괄호 표기처럼 명시적인 alias 패턴만 후보로 추출합니다.
+주변 단어를 넓게 줍는 실험 모드는 `--loose-cooccurrence`로 켤 수 있지만 노이즈가 많습니다.
+`--llm-verify`를 붙이면 Ollama chat model이 후보를 한 번 더 검수합니다.
+검수는 후보를 새로 생성하지 않고, 추출된 후보가 실제 별칭으로 명시되어 있는지만 JSON으로 판정합니다.
+Qwen 호출에는 `think: false`를 사용합니다.
+LLM alias generator와 동일하게 낮은 신호의 일부 `parent_category`는 기본 제외합니다.
+이 제외는 `category`에도 적용합니다.
+필요하면 `--include-excluded-parent-categories`로 제외 없이 실행할 수 있습니다.
+커뮤니티/외부 사이트를 사용할 때는 해당 사이트의 이용약관과 robots 정책을 먼저 확인합니다.
+
+CSV는 `alias`와 `item_id` 또는 `item_name` 계열 컬럼을 사용합니다.
+지원 컬럼 예:
+
+- `alias`
+- `item_id` 또는 `entity_id`
+- `item_name`, `name`, `name_en`, `name_ko`, `normalized_name`
+- `lang`
+- `confidence`
+- `source_url`
+- `note`
+
+Ollama 검수 포함 예시:
+
+```bash
+./venv/bin/python -m rag_alias_v3.item_alias_importer --lang ko \
+  --crawl-seed https://gall.dcinside.com/mgallery/board/lists/?id=eft \
+  --crawl-allowed-domain gall.dcinside.com \
+  --crawl-allowed-path-prefix /mgallery/board/ \
+  --crawl-max-pages 10 \
+  --llm-verify \
+  --dry-run
+```
+
 검수 후 아이템 빌더를 다시 실행해야 approved alias가 RAG chunk에 반영됩니다.
 
 ## V3 Retrieval
@@ -117,6 +174,7 @@ V3 검색은 `tools/retriever_v3.py`를 사용합니다.
 - vector search
 - PostgreSQL `tsvector`
 - PostgreSQL `pg_trgm`
+- item name expansion search for Korean transliteration queries
 - reciprocal rank fusion
 - automatic high-confidence domain filtering
 - soft domain route boosting
@@ -130,6 +188,11 @@ V3 검색은 `tools/retriever_v3.py`를 사용합니다.
 ./venv/bin/python -m tools.retriever_v3 "터미널 접근 스토리" --domain story --limit 3
 ./venv/bin/python -m tools.retriever_v3 "Smugglers 2026 어디 나와" --domain information --limit 3
 ```
+
+이름 확장 검색은 alias 테이블에 없는 단순 음차 검색을 보완합니다.
+예를 들어 `살레와` 같은 한글 음차를 `salewa` 계열 후보로 확장하고,
+`items.name_en`, `items.name_ko`, `items.name_ja`, `items.normalized_name`에 trigram으로 매칭한 뒤 기존 RRF에 합칩니다.
+커뮤니티 약어 전체를 대체하지는 않으며, `글카`, `므80`, `블러드키` 같은 관용어는 여전히 approved alias나 검색 로그 기반 후보가 필요할 수 있습니다.
 
 ## V3 Evaluation
 
