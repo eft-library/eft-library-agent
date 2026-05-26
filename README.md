@@ -264,6 +264,8 @@ This guard checks whether retrieved local documents actually contain enough info
 If local results are broad keyword noise or lack the requested fact, the pipeline uses web fallback instead of answering from unrelated chunks.
 The V3 context also includes a short relation legend so the local model preserves item relationship direction.
 For example, `[이 아이템 제작에 필요한 재료]` means the item is craftable, and the facility/level in parentheses is the craft location.
+To avoid stale or incorrect answer contamination, the V3 LLM prompt does not include previous assistant answers as factual context.
+Only recent user questions may be included, and they are explicitly marked as non-factual history for pronoun resolution.
 
 스트리밍 API 요청 예시:
 

@@ -66,19 +66,33 @@ IMPORTANT: Respond in English only.
 
 
 def _build_messages(messages: list[ChatMessageV3], context: str) -> list[dict]:
-    msg_list: list[dict] = []
+    if not messages:
+        return []
 
-    for i, message in enumerate(messages):
-        is_last = i == len(messages) - 1
-        if message.role == "user" and is_last:
-            content = message.content
-            if context:
-                content = f"[현재 참고 문서]\n{context}\n\n질문: {content}"
-            msg_list.append({"role": "user", "content": content})
-        elif message.role in ("user", "assistant", "system"):
-            msg_list.append({"role": message.role, "content": message.content})
+    current = messages[-1].content
+    previous_user_questions = [
+        message.content
+        for message in messages[:-1]
+        if message.role == "user" and message.content.strip()
+    ][-3:]
 
-    return msg_list
+    history_block = ""
+    if previous_user_questions:
+        history_block = "\n\n[이전 사용자 질문 - 사실 근거로 사용 금지]\n" + "\n".join(
+            f"- {question}" for question in previous_user_questions
+        )
+
+    content = current
+    if context:
+        content = (
+            f"[현재 참고 문서]\n{context}"
+            f"{history_block}\n\n"
+            f"질문: {current}"
+        )
+    elif history_block:
+        content = f"{history_block}\n\n질문: {current}"
+
+    return [{"role": "user", "content": content}]
 
 
 async def chat_llm_stream_v3(
